@@ -88,7 +88,6 @@ AI Island 會在 `~/.claude/hooks/` 安裝 hooks，透過 Unix socket 傳遞 ses
 - **動態面板高度** — 面板高度依據 session 數量自動調整，不再固定高度。
 - **Session 資訊強化** — 每個 session 列顯示三行：專案名稱、你的最新提問、目前工具/狀態。
 - **非 ASCII 路徑支援** — 修復專案路徑包含中文、日文等非 ASCII 字元時，JSONL 解析失敗的問題。
-- **移除 Check for Updates** — 設定選單移除了更新檢查功能。因此為開源讓大家自己調整的版本。
 - **GitHub 連結重新命名** — 「Star on GitHub」改為「Original Source on GitHub」以標示此為 Fork 版本。
 
 ## 授權

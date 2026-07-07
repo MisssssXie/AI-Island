@@ -85,9 +85,20 @@ if ! command -v gh &> /dev/null; then
     exit 1
 fi
 
+# generate_appcast 可能在 APPCAST_DIR 產生 delta patch（給舊版用戶做增量更新），
+# 但它猜測的下載網址是 raw.githubusercontent.com/<delta 檔名> —— 這個檔案從沒被
+# 推上 git（releases/ 整個被 .gitignore），所以永遠 404。跟 DMG 一樣上傳成
+# GitHub Release asset，下面 Step 3 再把 appcast.xml 裡的網址換成真正能下載的連結。
+DELTA_FILES=("$APPCAST_DIR"/*.delta)
+[ -e "${DELTA_FILES[0]}" ] || DELTA_FILES=()
+
 if gh release view "v$VERSION" --repo "$GITHUB_REPO" &>/dev/null; then
     echo "Release v$VERSION 已存在，更新中..."
     gh release upload "v$VERSION" "$DMG_PATH" --repo "$GITHUB_REPO" --clobber
+    if [ ${#DELTA_FILES[@]} -gt 0 ]; then
+        echo "上傳 delta 更新檔..."
+        gh release upload "v$VERSION" "${DELTA_FILES[@]}" --repo "$GITHUB_REPO" --clobber
+    fi
 else
     echo "建立 release v$VERSION..."
     gh release create "v$VERSION" "$DMG_PATH" \
@@ -103,6 +114,10 @@ else
 
 ### Auto-updates
 After installation, $APP_NAME will automatically check for updates."
+    if [ ${#DELTA_FILES[@]} -gt 0 ]; then
+        echo "上傳 delta 更新檔..."
+        gh release upload "v$VERSION" "${DELTA_FILES[@]}" --repo "$GITHUB_REPO" --clobber
+    fi
 fi
 
 # GitHub 上傳時檔名裡的空白會變成句點，直接向 GitHub 查詢實際網址，不要自己猜檔名
@@ -124,6 +139,21 @@ cp "$APPCAST_DIR/appcast.xml" "$APPCAST_ROOT"
 # 不能用不限定版本的萬用 pattern — 否則會把其他版本（例如 1.5.0）的 enclosure url
 # 也一起覆寫成這次的下載連結，汙染 appcast 歷史紀錄。
 sed -i '' "s|url=\"[^\"]*-$VERSION.dmg\"|url=\"$GITHUB_DOWNLOAD_URL\"|g" "$APPCAST_ROOT"
+
+# Delta 檔案同理：換成真正上傳到 GitHub Release 的下載連結。用檔名裡的版本區間
+# （例如 "2026070703-20260707"）精準比對，同一個 release 可能有多個 delta。
+for delta_file in "${DELTA_FILES[@]}"; do
+    delta_base="$(basename "$delta_file" .delta)"
+    version_span="${delta_base#"$APP_NAME"}"
+    DELTA_DOWNLOAD_URL=$(gh release view "v$VERSION" --repo "$GITHUB_REPO" --json assets \
+        --jq --arg span "$version_span" '.assets[] | select(.name | endswith(".delta") and contains($span)) | .url')
+    if [ -n "$DELTA_DOWNLOAD_URL" ]; then
+        sed -i '' "s|url=\"[^\"]*$version_span\.delta\"|url=\"$DELTA_DOWNLOAD_URL\"|g" "$APPCAST_ROOT"
+        echo "Delta download URL ($version_span): $DELTA_DOWNLOAD_URL"
+    else
+        echo "警告：找不到 delta $version_span 的上傳網址，appcast 裡的連結可能仍是壞的"
+    fi
+done
 
 echo "appcast.xml 已更新: $APPCAST_ROOT"
 echo "發布網址: https://raw.githubusercontent.com/$GITHUB_REPO/main/appcast.xml"
