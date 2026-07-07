@@ -1,6 +1,6 @@
 <div align="center">
   <img src="img/128.png" alt="Claude Island" width="128" height="128">
-  <h3>Claude Island（調整版）</h3>
+  <h3>AI-Island <Fork from Claude Island（調整版）></h3>
   <p>這是基於 <a href="https://github.com/farouqaldori/claude-island">claude-island</a> 進行的調整版本，詳細修改項目以及安裝方法可以查看下方 Fork。</p>
   <a href="https://github.com/sherry30219-byte/claude-island-modify/releases/latest">
     <img src="https://img.shields.io/badge/下載-DMG-blue?style=for-the-badge" alt="下載 DMG" />
@@ -11,7 +11,7 @@
 
 - **瀏海 UI** — 從 MacBook 瀏海位置展開的動畫覆蓋層
 - **即時 Session 監控** — 同時追蹤多個 Claude Code session 的狀態
-- **權限審批** — 直接在瀏海上批准或拒絕工具執行，不需要切換到終端機
+- **權限審批** — 直接在瀏海上批准或拒絕工具執行，不需要切換到終端機，或是開啟Auto自動核准模式
 - **聊天記錄** — 查看完整對話歷史，支援 Markdown 渲染
 - **自動安裝** — 首次啟動時自動安裝 Hooks
 
