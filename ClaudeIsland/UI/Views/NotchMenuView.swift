@@ -128,6 +128,8 @@ struct NotchMenuView: View {
 
                 AccessibilityRow(isEnabled: AXIsProcessTrusted())
 
+                HideShortcutRow()
+
                 Divider()
                     .background(Color.white.opacity(0.08))
                     .padding(.vertical, 4)
@@ -237,6 +239,34 @@ struct AutoApprovalModeRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 26)
             }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+}
+
+// MARK: - Hide Shortcut Row
+
+/// Informational row surfacing the global hotkey (registered in
+/// `HideShortcutMonitor`) that toggles the island's visibility from anywhere,
+/// regardless of which app is focused.
+struct HideShortcutRow: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 16)
+
+            Text("Hide Shortcut")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+
+            Spacer()
+
+            Text("⌃⌥X ×2")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.4))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
