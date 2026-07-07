@@ -134,11 +134,12 @@ extension HookEvent {
             return .compacting
         }
 
-        // Permission request creates waitingForApproval state
-        if expectsResponse, let tool = tool {
+        // Permission request creates waitingForApproval state. Tolerate a missing
+        // tool name (Codex payloads) rather than falling through to .idle.
+        if expectsResponse {
             return .waitingForApproval(PermissionContext(
                 toolUseId: toolUseId ?? "",
-                toolName: tool,
+                toolName: tool ?? "unknown",
                 toolInput: toolInput,
                 receivedAt: Date()
             ))

@@ -20,6 +20,9 @@ struct NotchMenuView: View {
     @ObservedObject private var soundSelector = SoundSelector.shared
     @State private var hooksInstalled: Bool = false
     @State private var launchAtLogin: Bool = false
+    @State private var codexDetectionEnabled: Bool = false
+    @State private var codexNeedsTrust: Bool = false
+    @State private var autoApprovalMode: AutoApprovalMode = .off
 
     var body: some View {
         // ScrollView so the menu gracefully scrolls when content exceeds the
@@ -80,6 +83,49 @@ struct NotchMenuView: View {
                     }
                 }
 
+                MenuToggleRow(
+                    icon: "chevron.left.forwardslash.chevron.right",
+                    label: "Codex Detection",
+                    isOn: codexDetectionEnabled
+                ) {
+                    if codexDetectionEnabled {
+                        AppSettings.enableCodexDetection = false
+                        codexDetectionEnabled = false
+                        codexNeedsTrust = false
+                        // Uninstall scans/writes every Codex home — keep it off the UI thread.
+                        DispatchQueue.global(qos: .utility).async {
+                            CodexHookInstaller.uninstall()
+                        }
+                    } else {
+                        AppSettings.enableCodexDetection = true
+                        codexDetectionEnabled = true
+                        // Install spawns `codex --version` + `which python3` and scans/
+                        // writes every home — keep it off the UI thread (plan §5.8).
+                        DispatchQueue.global(qos: .utility).async {
+                            CodexHookInstaller.installIfNeeded()
+                            let needsTrust = CodexHookInstaller.needsTrustApproval()
+                            DispatchQueue.main.async {
+                                codexNeedsTrust = needsTrust
+                            }
+                        }
+                    }
+                    Task { await SessionStore.shared.refreshPublish() }
+                }
+
+                // One-time nudge: Codex won't run un-trusted hooks until the user
+                // runs /hooks. Tapping copies the command to the clipboard.
+                if codexDetectionEnabled && codexNeedsTrust {
+                    CodexTrustRow {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString("/hooks", forType: .string)
+                    }
+                }
+
+                AutoApprovalModeRow(mode: autoApprovalMode) { newMode in
+                    autoApprovalMode = newMode
+                    AppSettings.autoApprovalMode = newMode
+                }
+
                 AccessibilityRow(isEnabled: AXIsProcessTrusted())
 
                 Divider()
@@ -125,7 +171,125 @@ struct NotchMenuView: View {
     private func refreshStates() {
         hooksInstalled = HookInstaller.isInstalled()
         launchAtLogin = SMAppService.mainApp.status == .enabled
+        codexDetectionEnabled = AppSettings.enableCodexDetection
+        autoApprovalMode = AppSettings.autoApprovalMode
         screenSelector.refreshScreens()
+
+        guard codexDetectionEnabled else {
+            codexNeedsTrust = false
+            return
+        }
+        // Scans config.toml in every Codex home — keep it off the UI thread.
+        DispatchQueue.global(qos: .utility).async {
+            let needsTrust = CodexHookInstaller.needsTrustApproval()
+            DispatchQueue.main.async {
+                codexNeedsTrust = needsTrust
+            }
+        }
+    }
+}
+
+// MARK: - Auto Approval Mode Row
+
+/// Three-segment selector for the global auto-approval posture. Shows a warning
+/// when `.all` is chosen (the agent can run anything; deny-list is a last resort).
+struct AutoApprovalModeRow: View {
+    let mode: AutoApprovalMode
+    let onSelect: (AutoApprovalMode) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "bolt.badge.a")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.7))
+                    .frame(width: 16)
+
+                Text("Auto-Approve")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    ForEach(AutoApprovalMode.allCases, id: \.self) { option in
+                        Button {
+                            onSelect(option)
+                        } label: {
+                            Text(option.displayName)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(mode == option ? .black : .white.opacity(0.6))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Capsule().fill(mode == option ? Color.white.opacity(0.9) : Color.white.opacity(0.08))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            if mode == .all {
+                Text("⚠︎ Agents may run any command without confirmation. The deny-list is only a last resort.")
+                    .font(.system(size: 10))
+                    .foregroundColor(TerminalColors.amber.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 26)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+}
+
+// MARK: - Codex Trust Row
+
+/// Shown when Codex hooks are installed but not yet trusted. Tapping copies the
+/// `/hooks` command so the user can paste it into Codex to complete trust.
+struct CodexTrustRow: View {
+    let onTap: () -> Void
+
+    @State private var isHovered = false
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            onTap()
+            copied = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.shield")
+                    .font(.system(size: 12))
+                    .foregroundColor(TerminalColors.amber)
+                    .frame(width: 16)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Trust Codex hooks")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(isHovered ? 1.0 : 0.8))
+                    Text(copied ? "Copied — run /hooks in Codex" : "Run /hooks in Codex, then trust")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.4))
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(copied ? TerminalColors.green : .white.opacity(0.4))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isHovered ? Color.white.opacity(0.08) : TerminalColors.amber.opacity(0.06))
+            )
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
     }
 }
 

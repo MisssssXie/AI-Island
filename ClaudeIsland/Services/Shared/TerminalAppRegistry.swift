@@ -71,4 +71,20 @@ struct TerminalAppRegistry: Sendable {
     static func isTerminalBundle(_ bundleId: String) -> Bool {
         bundleIdentifiers.contains(bundleId)
     }
+
+    /// Editor apps that accept a folder open via LaunchServices: opening an
+    /// already-open folder raises that project's window (or opens the project
+    /// fresh). Real terminals are excluded — they'd spawn a new shell window.
+    static let editorBundleIdentifiers: Set<String> = [
+        "com.microsoft.VSCode",
+        "com.microsoft.VSCodeInsiders",
+        "com.todesktop.230313mzl4w4u92",  // Cursor
+        "com.exafunction.windsurf",
+        "dev.zed.Zed"
+    ]
+
+    /// Check if a bundle identifier is a folder-openable editor (VS Code & friends)
+    static func isEditorBundle(_ bundleId: String) -> Bool {
+        editorBundleIdentifiers.contains(bundleId)
+    }
 }

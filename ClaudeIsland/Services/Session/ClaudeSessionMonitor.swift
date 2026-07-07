@@ -42,7 +42,9 @@ class ClaudeSessionMonitor: ObservableObject {
                     await SessionStore.shared.process(.hookReceived(event))
                 }
 
-                if event.sessionPhase == .processing {
+                // The JSONLInterruptWatcher only understands Claude JSONL. Codex
+                // interrupt detection (turn_aborted) is handled by its parser (Phase 2).
+                if event.sessionPhase == .processing && !event.isCodex {
                     Task { @MainActor in
                         InterruptWatcherManager.shared.startWatching(
                             sessionId: event.sessionId,
@@ -125,6 +127,27 @@ class ClaudeSessionMonitor: ObservableObject {
     func archiveSession(sessionId: String) {
         Task {
             await SessionStore.shared.process(.sessionEnded(sessionId: sessionId))
+        }
+    }
+
+    /// Toggle per-session auto-approval (bolt): force-on when not already forced,
+    /// otherwise clear the override so the session follows the global setting
+    /// again (there must always be a path back to "follow global").
+    func toggleAutoApprove(sessionId: String) {
+        Task {
+            guard let session = await SessionStore.shared.session(for: sessionId) else { return }
+            let newValue: Bool? = (session.autoApproveOverride == true) ? nil : true
+            await SessionStore.shared.setAutoApproveOverride(sessionId: sessionId, newValue)
+        }
+    }
+
+    /// Approve every session currently waiting for approval.
+    func approveAllPermissions() {
+        Task {
+            let sessions = await SessionStore.shared.allSessions()
+            for session in sessions where session.phase.isWaitingForApproval {
+                approvePermission(sessionId: session.sessionId)
+            }
         }
     }
 

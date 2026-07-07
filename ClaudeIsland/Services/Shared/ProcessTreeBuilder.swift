@@ -90,6 +90,23 @@ struct ProcessTreeBuilder: Sendable {
         return nil
     }
 
+    /// Walk up the process tree from `pid` (inclusive) for the first ancestor matching `predicate`.
+    nonisolated func findFirstAncestor(of pid: Int, tree: [Int: ProcessInfo], matching predicate: (Int) -> Bool) -> Int? {
+        var current = pid
+        var depth = 0
+
+        while current > 1 && depth < 20 {
+            if predicate(current) {
+                return current
+            }
+            guard let info = tree[current] else { break }
+            current = info.ppid
+            depth += 1
+        }
+
+        return nil
+    }
+
     /// Check if targetPid is a descendant of ancestorPid
     nonisolated func isDescendant(targetPid: Int, ofAncestor ancestorPid: Int, tree: [Int: ProcessInfo]) -> Bool {
         var current = targetPid

@@ -39,6 +39,9 @@ enum AppSettings {
     private enum Keys {
         static let notificationSound = "notificationSound"
         static let claudeDirectoryName = "claudeDirectoryName"
+        static let enableCodexDetection = "enableCodexDetection"
+        static let autoApprovalMode = "autoApprovalMode"
+        static let autoApproveDenyPatterns = "autoApproveDenyPatterns"
     }
 
     // MARK: - Notification Sound
@@ -69,6 +72,49 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue.trimmingCharacters(in: .whitespaces), forKey: Keys.claudeDirectoryName)
+        }
+    }
+
+    // MARK: - Codex Detection
+
+    /// Whether to detect and display OpenAI Codex sessions.
+    /// Defaults to on when a `~/.codex` directory exists on first launch.
+    static var enableCodexDetection: Bool {
+        get {
+            if let value = defaults.object(forKey: Keys.enableCodexDetection) as? Bool {
+                return value
+            }
+            return FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.codex")
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.enableCodexDetection)
+        }
+    }
+
+    // MARK: - Auto Approval
+
+    /// Global auto-approval posture. Defaults to `.off` (all manual).
+    static var autoApprovalMode: AutoApprovalMode {
+        get {
+            guard let raw = defaults.string(forKey: Keys.autoApprovalMode),
+                  let mode = AutoApprovalMode(rawValue: raw) else {
+                return .off
+            }
+            return mode
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Keys.autoApprovalMode)
+        }
+    }
+
+    /// Regex deny-list applied in `.all` mode; a hit falls back to manual approval.
+    static var autoApproveDenyPatterns: [String] {
+        get {
+            defaults.stringArray(forKey: Keys.autoApproveDenyPatterns)
+                ?? AutoApprovalPolicy.defaultDenyPatterns
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.autoApproveDenyPatterns)
         }
     }
 }

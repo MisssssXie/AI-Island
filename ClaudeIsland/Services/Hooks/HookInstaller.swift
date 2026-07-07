@@ -9,6 +9,9 @@ import Foundation
 
 struct HookInstaller {
 
+    /// Marker used to identify our own hook entries when merging shared files.
+    private static let scriptMarker = "claude-island-state.py"
+
     /// Install hook script and update settings.json on app launch
     static func installIfNeeded() {
         let hooksDir = ClaudePaths.hooksDir
@@ -56,18 +59,7 @@ struct HookInstaller {
         // events we no longer register. Fixes users who installed v1.3 on an older
         // Claude Code and now have invalid keys like PermissionDenied sitting in
         // their settings.json (issue #85).
-        var cleanedHooks: [String: Any] = [:]
-        for (event, value) in hooks {
-            if let entries = value as? [[String: Any]] {
-                let cleaned = entries.compactMap { removingClaudeIslandHooks(from: $0) }
-                if !cleaned.isEmpty {
-                    cleanedHooks[event] = cleaned
-                }
-            } else {
-                cleanedHooks[event] = value
-            }
-        }
-        hooks = cleanedHooks
+        hooks = HooksFileMerger.stripMarkedHooks(from: hooks, marker: scriptMarker)
 
         // Register only hooks the installed Claude Code version supports.
         // When detection fails, fall back to the baseline set that every
@@ -98,70 +90,21 @@ struct HookInstaller {
 
     // MARK: - Claude Code Version Detection
 
-    /// Simple semantic version used to gate which hook events we register.
     /// Claude Code rejects unknown hook keys, so we must only register
     /// events the installed version knows about.
-    struct ClaudeCodeVersion: Comparable {
-        let major: Int
-        let minor: Int
-        let patch: Int
-
-        static func < (lhs: ClaudeCodeVersion, rhs: ClaudeCodeVersion) -> Bool {
-            (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
-        }
-    }
+    typealias ClaudeCodeVersion = SemanticVersion
 
     /// Runs `claude --version` and parses the result. Returns nil on any
     /// failure (binary not found, non-zero exit, unparseable output).
     static func detectClaudeCodeVersion() -> ClaudeCodeVersion? {
         // Claude Code can land in a few typical spots; try each until we find one
-        let fm = FileManager.default
-        let candidates = [
+        SemanticVersion.detect(candidates: [
             "/usr/local/bin/claude",
             "/opt/homebrew/bin/claude",
             NSHomeDirectory() + "/.claude/local/claude",
             NSHomeDirectory() + "/.local/bin/claude",
             "/usr/bin/claude",
-        ]
-        guard let claudePath = candidates.first(where: { fm.fileExists(atPath: $0) }) else {
-            return nil
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: claudePath)
-        process.arguments = ["--version"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: data, encoding: .utf8) else { return nil }
-            return parseClaudeCodeVersion(from: output)
-        } catch {
-            return nil
-        }
-    }
-
-    /// Extracts the first `X.Y.Z` token from arbitrary version output.
-    /// Accepts any prefix/suffix — works for "2.1.88", "v2.1.88", "claude 2.1.88 (...)" etc.
-    static func parseClaudeCodeVersion(from text: String) -> ClaudeCodeVersion? {
-        let pattern = #"(\d+)\.(\d+)\.(\d+)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(text.startIndex..., in: text)
-        guard let match = regex.firstMatch(in: text, range: range),
-              match.numberOfRanges == 4,
-              let majorRange = Range(match.range(at: 1), in: text),
-              let minorRange = Range(match.range(at: 2), in: text),
-              let patchRange = Range(match.range(at: 3), in: text),
-              let major = Int(text[majorRange]),
-              let minor = Int(text[minorRange]),
-              let patch = Int(text[patchRange])
-        else { return nil }
-        return ClaudeCodeVersion(major: major, minor: minor, patch: patch)
+        ])
     }
 
     /// Returns the ordered list of (event, config) pairs to register, filtered
@@ -217,72 +160,19 @@ struct HookInstaller {
 
     /// Check if hooks are currently installed
     static func isInstalled() -> Bool {
-        let settings = ClaudePaths.settingsFile
-
-        guard let data = try? Data(contentsOf: settings),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let hooks = json["hooks"] as? [String: Any] else {
-            return false
-        }
-
-        for (_, value) in hooks {
-            if let entries = value as? [[String: Any]] {
-                for entry in entries {
-                    if let entryHooks = entry["hooks"] as? [[String: Any]] {
-                        for hook in entryHooks {
-                            if let cmd = hook["command"] as? String,
-                               cmd.contains("claude-island-state.py") {
-                                return true
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return false
+        HooksFileMerger.isInstalled(at: ClaudePaths.settingsFile, marker: scriptMarker)
     }
 
     /// Uninstall hooks from settings.json and remove script
     static func uninstall() {
         let hooksDir = ClaudePaths.hooksDir
         let pythonScript = hooksDir.appendingPathComponent("claude-island-state.py")
-        let settings = ClaudePaths.settingsFile
 
         try? FileManager.default.removeItem(at: pythonScript)
-
-        guard let data = try? Data(contentsOf: settings),
-              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var hooks = json["hooks"] as? [String: Any] else {
-            return
-        }
-
-        for (event, value) in hooks {
-            if var entries = value as? [[String: Any]] {
-                entries = entries.compactMap { removingClaudeIslandHooks(from: $0) }
-
-                if entries.isEmpty {
-                    hooks.removeValue(forKey: event)
-                } else {
-                    hooks[event] = entries
-                }
-            }
-        }
-
-        if hooks.isEmpty {
-            json.removeValue(forKey: "hooks")
-        } else {
-            json["hooks"] = hooks
-        }
-
-        if let data = try? JSONSerialization.data(
-            withJSONObject: json,
-            options: [.prettyPrinted, .sortedKeys]
-        ) {
-            try? data.write(to: settings)
-        }
+        HooksFileMerger.uninstall(fileURL: ClaudePaths.settingsFile, marker: scriptMarker)
     }
 
-    private static func detectPython() -> String {
+    static func detectPython() -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["python3"]
@@ -298,23 +188,5 @@ struct HookInstaller {
         } catch {}
 
         return "python"
-    }
-
-    nonisolated private static func removingClaudeIslandHooks(from entry: [String: Any]) -> [String: Any]? {
-        guard var entryHooks = entry["hooks"] as? [[String: Any]] else {
-            return entry
-        }
-
-        entryHooks.removeAll(where: isClaudeIslandHook)
-        guard !entryHooks.isEmpty else { return nil }
-
-        var updatedEntry = entry
-        updatedEntry["hooks"] = entryHooks
-        return updatedEntry
-    }
-
-    nonisolated private static func isClaudeIslandHook(_ hook: [String: Any]) -> Bool {
-        let cmd = hook["command"] as? String ?? ""
-        return cmd.contains("claude-island-state.py")
     }
 }

@@ -24,6 +24,11 @@ struct PermissionContext: Sendable {
             return command.count > 100 ? String(command.prefix(100)) + "..." : command
         }
 
+        // For Codex shell tools (exec_command), the command lives under `cmd`.
+        if let command = input["cmd"]?.value as? String {
+            return command.count > 100 ? String(command.prefix(100)) + "..." : command
+        }
+
         // For Write/Edit, show the file path
         if toolName == "Write" || toolName == "Edit", let path = input["file_path"]?.value as? String {
             return URL(fileURLWithPath: path).lastPathComponent
@@ -120,6 +125,10 @@ enum SessionPhase: Sendable {
             return true  // Can become idle
         case (.waitingForInput, .compacting):
             return true
+        case (.waitingForInput, .waitingForApproval):
+            return true  // A permission request can arrive after the agent yielded
+                         // the turn (Codex fires Stop between turns, then requests
+                         // approval on the next tool) — must still show the prompt.
 
         // WaitingForApproval transitions
         case (.waitingForApproval, .processing):
@@ -138,6 +147,8 @@ enum SessionPhase: Sendable {
             return true
         case (.compacting, .waitingForInput):
             return true
+        case (.compacting, .waitingForApproval):
+            return true  // A tool may request approval right after compaction ends
 
         // Allow staying in same state (no-op transitions)
         default:
