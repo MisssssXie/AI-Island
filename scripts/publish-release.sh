@@ -119,8 +119,11 @@ echo "=== Step 3: Publishing Appcast ==="
 cp "$APPCAST_DIR/appcast.xml" "$APPCAST_ROOT"
 
 # 把 generate_appcast 猜的下載網址（依 SUFeedURL 推斷，可能是 raw.githubusercontent 的假路徑
-# 或空白未轉碼的檔名）換成真正的 GitHub release 下載連結
-sed -i '' "s|url=\"[^\"]*\.dmg\"|url=\"$GITHUB_DOWNLOAD_URL\"|g" "$APPCAST_ROOT"
+# 或空白未轉碼的檔名）換成真正的 GitHub release 下載連結。
+# 只替換「這次發布版本」的那個 <item>（用檔名尾端 -$VERSION.dmg 精準比對），
+# 不能用不限定版本的萬用 pattern — 否則會把其他版本（例如 1.5.0）的 enclosure url
+# 也一起覆寫成這次的下載連結，汙染 appcast 歷史紀錄。
+sed -i '' "s|url=\"[^\"]*-$VERSION.dmg\"|url=\"$GITHUB_DOWNLOAD_URL\"|g" "$APPCAST_ROOT"
 
 echo "appcast.xml 已更新: $APPCAST_ROOT"
 echo "發布網址: https://raw.githubusercontent.com/$GITHUB_REPO/main/appcast.xml"

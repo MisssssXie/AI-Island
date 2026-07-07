@@ -15,25 +15,13 @@
             </sparkle:deltas>
         </item>
         <item>
-            <title>1.6.0</title>
-            <pubDate>Tue, 07 Jul 2026 16:52:00 +0800</pubDate>
-            <sparkle:version>20260708</sparkle:version>
-            <sparkle:shortVersionString>1.6.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.6.0/AI.Island-1.6.0.dmg" length="3780882" type="application/octet-stream" sparkle:edSignature="7DQUikmpPHdT/V+ZEFbdQRyv1F80k+C1sFwxfN1Gy5kFzr7GiT6LEa618jiv96Ulz/G5AJxTA+85NgKYj5OpDA=="/>
-            <sparkle:deltas>
-                <enclosure url="https://raw.githubusercontent.com/MisssssXie/AI-Island/main/AI%20Island20260708-20260707.delta" sparkle:deltaFrom="20260707" length="198202" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977616" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="XYn/AGZlOP9mgQkuhAZFMsnBCbBQgm2n0YwmRJq7zQgRN2bMvHOutWEZMM6MYkhltTXzAQOqS5rO7M/aiTWkBg=="/>
-            </sparkle:deltas>
-        </item>
-        <item>
             <title>1.5.0</title>
             <pubDate>Tue, 07 Jul 2026 15:20:44 +0800</pubDate>
             <sparkle:version>20260707</sparkle:version>
             <sparkle:shortVersionString>1.5.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.6.0/AI.Island-1.6.0.dmg" length="3769376" type="application/octet-stream" sparkle:edSignature="+OJbvH1UVDz1AVyi1k9yln2/avhL0YjCkVbbxrcF1qn4XWTiQZ4gm8rLGV92re0xw9CxCENUOWQdzFXSxcCsBQ=="/>
+            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.5.0/AI.Island-1.5.0.dmg" length="3769376" type="application/octet-stream" sparkle:edSignature="+OJbvH1UVDz1AVyi1k9yln2/avhL0YjCkVbbxrcF1qn4XWTiQZ4gm8rLGV92re0xw9CxCENUOWQdzFXSxcCsBQ=="/>
         </item>
     </channel>
 </rss>
