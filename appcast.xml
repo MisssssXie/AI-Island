@@ -5,6 +5,18 @@
         <item>
             <title>1.6.0</title>
             <pubDate>Tue, 07 Jul 2026 16:52:00 +0800</pubDate>
+            <sparkle:version>2026070703</sparkle:version>
+            <sparkle:shortVersionString>1.6.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.6.0/AI.Island-1.6.0.dmg" length="3780816" type="application/octet-stream" sparkle:edSignature="0UvpyfSrCNV1DXGAMyqV/O7/Q20aqHJAyBF1sNkBVxayXqbPefRso0R1+sISdPOxctUE9OB6FrX1Ct+GZRmFCw=="/>
+            <sparkle:deltas>
+                <enclosure url="https://raw.githubusercontent.com/MisssssXie/AI-Island/main/AI%20Island2026070703-20260707.delta" sparkle:deltaFrom="20260707" length="224810" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977616" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="Yo7CJ1zCUSjYIzINqNXZLsnoanZSQEcS95unxGIt+5qcS1VgH/Dmp4kf5LwjY9ZEEUibVLdbeRUpMc52PMzQCQ=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
+            <title>1.6.0</title>
+            <pubDate>Tue, 07 Jul 2026 16:52:00 +0800</pubDate>
             <sparkle:version>20260708</sparkle:version>
             <sparkle:shortVersionString>1.6.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
