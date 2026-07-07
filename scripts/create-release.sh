@@ -1,5 +1,5 @@
 #!/bin/bash
-# Create a release: notarize, create DMG, sign for Sparkle, upload to GitHub, update website
+# Create a release: notarize, create DMG, sign for Sparkle, upload to GitHub, publish appcast
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,12 +12,11 @@ KEYS_DIR="$PROJECT_DIR/.sparkle-keys"
 # GitHub repository (owner/repo format)
 GITHUB_REPO="MisssssXie/AI-Island"
 
-# Website repo for auto-updating appcast
-WEBSITE_DIR="${CLAUDE_ISLAND_WEBSITE:-$PROJECT_DIR/../ClaudeIsland-website}"
-WEBSITE_PUBLIC="$WEBSITE_DIR/public"
+# appcast.xml is committed to the repo root and served via raw.githubusercontent.com
+APPCAST_ROOT="$PROJECT_DIR/appcast.xml"
 
-APP_PATH="$EXPORT_PATH/Claude Island.app"
-APP_NAME="ClaudeIsland"
+APP_NAME="AI Island"
+APP_PATH="$EXPORT_PATH/$APP_NAME.app"
 KEYCHAIN_PROFILE="ClaudeIsland"
 
 echo "=== Creating Release ==="
@@ -100,17 +99,17 @@ fi
 if command -v create-dmg &> /dev/null; then
     echo "Using create-dmg for prettier output..."
     create-dmg \
-        --volname "Claude Island" \
+        --volname "$APP_NAME" \
         --window-size 600 400 \
         --icon-size 100 \
-        --icon "Claude Island.app" 150 200 \
+        --icon "$APP_NAME.app" 150 200 \
         --app-drop-link 450 200 \
-        --hide-extension "Claude Island.app" \
+        --hide-extension "$APP_NAME.app" \
         "$DMG_PATH" \
         "$APP_PATH"
 else
     echo "Using hdiutil (install create-dmg for prettier DMG: brew install create-dmg)"
-    hdiutil create -volname "Claude Island" \
+    hdiutil create -volname "$APP_NAME" \
         -srcfolder "$APP_PATH" \
         -ov -format UDZO \
         "$DMG_PATH"
@@ -215,16 +214,16 @@ else
         echo "Creating release v$VERSION..."
         gh release create "v$VERSION" "$DMG_PATH" \
             --repo "$GITHUB_REPO" \
-            --title "Claude Island v$VERSION" \
-            --notes "## Claude Island v$VERSION
+            --title "$APP_NAME v$VERSION" \
+            --notes "## $APP_NAME v$VERSION
 
 ### Installation
 1. Download \`$APP_NAME-$VERSION.dmg\`
-2. Open the DMG and drag Claude Island to Applications
-3. Launch Claude Island from Applications
+2. Open the DMG and drag $APP_NAME to Applications
+3. Launch $APP_NAME from Applications
 
 ### Auto-updates
-After installation, Claude Island will automatically check for updates."
+After installation, $APP_NAME will automatically check for updates."
     fi
 
     GITHUB_DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/v$VERSION/$APP_NAME-$VERSION.dmg"
@@ -235,67 +234,38 @@ fi
 echo ""
 
 # ============================================
-# Step 6: Update website appcast and deploy
+# Step 6: Publish appcast.xml to GitHub (raw file)
 # ============================================
-echo "=== Step 6: Updating Website ==="
+echo "=== Step 6: Publishing Appcast ==="
 
-if [ -d "$WEBSITE_PUBLIC" ] && [ -f "$RELEASE_DIR/appcast/appcast.xml" ]; then
-    # Copy appcast to website
-    cp "$RELEASE_DIR/appcast/appcast.xml" "$WEBSITE_PUBLIC/appcast.xml"
+if [ -f "$RELEASE_DIR/appcast/appcast.xml" ]; then
+    cp "$RELEASE_DIR/appcast/appcast.xml" "$APPCAST_ROOT"
 
-    # Update the download URL in appcast to point to GitHub releases
+    # Update the download URL in appcast to point to the GitHub release asset
     if [ -n "$GITHUB_DOWNLOAD_URL" ]; then
-        sed -i '' "s|url=\"[^\"]*$APP_NAME-$VERSION.dmg\"|url=\"$GITHUB_DOWNLOAD_URL\"|g" "$WEBSITE_PUBLIC/appcast.xml"
+        sed -i '' "s|url=\"[^\"]*$APP_NAME-$VERSION.dmg\"|url=\"$GITHUB_DOWNLOAD_URL\"|g" "$APPCAST_ROOT"
         echo "Updated appcast.xml with GitHub download URL"
     fi
 
-    # Update src/config.ts with latest version and download URL (preserve other content)
-    CONFIG_FILE="$WEBSITE_DIR/src/config.ts"
-    if [ -n "$GITHUB_DOWNLOAD_URL" ]; then
-        if [ -f "$CONFIG_FILE" ]; then
-            # Update existing constants in-place
-            sed -i '' "s|export const LATEST_VERSION = .*|export const LATEST_VERSION = \"$VERSION\";|" "$CONFIG_FILE"
-            sed -i '' "s|export const DOWNLOAD_URL = .*|export const DOWNLOAD_URL = \"$GITHUB_DOWNLOAD_URL\";|" "$CONFIG_FILE"
-        else
-            # Create new config file
-            cat > "$CONFIG_FILE" << EOF
-// Auto-updated by create-release.sh
-export const LATEST_VERSION = "$VERSION";
-export const DOWNLOAD_URL = "$GITHUB_DOWNLOAD_URL";
-EOF
-        fi
-        echo "Updated src/config.ts with version $VERSION"
-    fi
+    echo "appcast.xml written to: $APPCAST_ROOT"
+    echo "Served via: https://raw.githubusercontent.com/$GITHUB_REPO/main/appcast.xml"
+    echo ""
 
-    # Deploy via Cloudflare Pages (manual wrangler deploy — the old GitHub
-    # repo is disabled, so git push is no longer an option).
-    cd "$WEBSITE_DIR" || exit 1
-
-    WRANGLER_PROJECT="${CLAUDE_ISLAND_WRANGLER_PROJECT:-claudeisland-website}"
-
-    read -p "Deploy website to Cloudflare Pages ($WRANGLER_PROJECT)? (Y/n) " -n 1 -r
+    read -p "Commit and push appcast.xml to origin/main now? (Y/n) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        if ! command -v wrangler >/dev/null 2>&1; then
-            echo "ERROR: wrangler not found. Install with: npm install -g wrangler"
-            echo "Skipping website deploy. Appcast updated locally at $WEBSITE_PUBLIC/appcast.xml"
-        else
-            echo "Building site..."
-            npm run build
-
-            echo "Deploying to Cloudflare Pages ($WRANGLER_PROJECT)..."
-            wrangler pages deploy dist --project-name="$WRANGLER_PROJECT"
-            echo "Website deployed!"
-        fi
+        cd "$PROJECT_DIR"
+        git add appcast.xml
+        git commit -m "chore: update appcast.xml for v$VERSION"
+        git push origin main
+        echo "appcast.xml pushed."
     else
-        echo "Skipped Cloudflare deploy."
-        echo "To deploy manually: cd $WEBSITE_DIR && npm run build && wrangler pages deploy dist --project-name=$WRANGLER_PROJECT"
+        echo "Skipped. Commit and push appcast.xml manually to publish the update feed:"
+        echo "  cd $PROJECT_DIR && git add appcast.xml && git commit -m 'chore: update appcast.xml for v$VERSION' && git push origin main"
     fi
-
-    cd "$PROJECT_DIR"
 else
-    echo "Website directory not found or appcast not generated"
-    echo "Skipping website update."
+    echo "No appcast.xml generated (Sparkle signing may have been skipped)."
+    echo "Skipping appcast publish."
 fi
 
 echo ""
@@ -310,6 +280,6 @@ fi
 if [ -n "$GITHUB_DOWNLOAD_URL" ]; then
     echo "  - GitHub: https://github.com/$GITHUB_REPO/releases/tag/v$VERSION"
 fi
-if [ -f "$WEBSITE_PUBLIC/appcast.xml" ]; then
-    echo "  - Website: $WEBSITE_PUBLIC/appcast.xml"
+if [ -f "$APPCAST_ROOT" ]; then
+    echo "  - Appcast feed: https://raw.githubusercontent.com/$GITHUB_REPO/main/appcast.xml"
 fi

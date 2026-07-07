@@ -63,9 +63,13 @@ fi
 echo "Using generate_keys from: $GENERATE_KEYS"
 echo ""
 
-# Generate the key pair (stores in Keychain, prints public key)
+# Generate the key pair (stores in Keychain, prints public key).
+# Note: -p only *looks up* an existing key and errors out if none exists yet —
+# running with no arguments is what actually generates one when missing.
 echo "Generating EdDSA key pair..."
-PUBLIC_KEY=$("$GENERATE_KEYS" -p 2>/dev/null | grep -oE '[A-Za-z0-9+/=]{40,}')
+GENERATE_OUTPUT=$("$GENERATE_KEYS")
+echo "$GENERATE_OUTPUT"
+PUBLIC_KEY=$(echo "$GENERATE_OUTPUT" | grep -oE '[A-Za-z0-9+/=]{40,}' | head -1)
 
 # Export the private key from Keychain to file (same key pair as above)
 echo "Exporting private key to file..."

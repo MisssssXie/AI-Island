@@ -7,8 +7,8 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://claudeisland.com/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/MisssssXie/AI-Island/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>w5NwH5KRfE7LfeZ09J8lWx3UQrWTqUbfH4HHBa1OPRk=</string>
+	<string>rid2WmR0sWs1x7QwjI++jUDx9algIhmCRtle7gYjEqI=</string>
 </dict>
 </plist>

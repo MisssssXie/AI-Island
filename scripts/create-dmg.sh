@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
 DMG_DIR="$BUILD_DIR/dmg"
-APP_NAME="Claude Island"
+APP_NAME="AI Island"
 
 echo "=== 建置 $APP_NAME ==="
 echo ""
@@ -18,20 +18,21 @@ mkdir -p "$BUILD_DIR"
 cd "$PROJECT_DIR"
 
 # Build Release
+# 用 ad-hoc 簽名（Sign to Run Locally），不需要對到任何 Apple Developer 憑證/帳號，
+# 也不會用到 notarize（那需要付費 Developer Program 帳號）。
 echo "正在建置 Release 版本..."
 xcodebuild -scheme ClaudeIsland \
     -configuration Release \
     -derivedDataPath "$BUILD_DIR/derived" \
-    CODE_SIGN_STYLE=Automatic \
+    CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="-" \
+    DEVELOPMENT_TEAM="" \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=YES \
     build 2>&1 | tail -5
 
 # 找到 .app
-APP_PATH=$(find "$BUILD_DIR/derived" -name "Claude Island.app" -type d | head -1)
-
-if [ -z "$APP_PATH" ]; then
-    # 嘗試另一個名稱
-    APP_PATH=$(find "$BUILD_DIR/derived" -name "ClaudeIsland.app" -type d | head -1)
-fi
+APP_PATH=$(find "$BUILD_DIR/derived/Build/Products/Release" -maxdepth 1 -name "*.app" -type d | head -1)
 
 if [ -z "$APP_PATH" ]; then
     echo "錯誤：找不到建置的 .app"

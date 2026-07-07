@@ -91,15 +91,6 @@ Claude Island 會在 `~/.claude/hooks/` 安裝 hooks，透過 Unix socket 傳遞
 - **移除 Check for Updates** — 設定選單移除了更新檢查功能。因此為開源讓大家自己調整的版本。
 - **GitHub 連結重新命名** — 「Star on GitHub」改為「Original Source on GitHub」以標示此為 Fork 版本。
 
-## 數據分析
-
-Claude Island 使用 Mixpanel 收集匿名使用數據：
-
-- **App Launched** — 應用程式版本、建置編號、macOS 版本
-- **Session Started** — 偵測到新的 Claude Code session 時
-
-不會收集任何個人資料或對話內容。
-
 ## 授權
 
 Apache 2.0
