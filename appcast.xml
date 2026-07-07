@@ -9,7 +9,7 @@
             <sparkle:shortVersionString>1.5.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.5.0/AI.Island-1.5.0.dmg" length="3769955" type="application/octet-stream" sparkle:edSignature="FNl+64/eruY9mD9dMJFzbUNCctgLCJZNDpFf05FLP3SDeZPrL/uGnXfwN0Sa9RXr+Ak3ZHg1KiWNNhv78X1RDQ=="/>
+            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.5.0/AI.Island-1.5.0.dmg" length="3769376" type="application/octet-stream" sparkle:edSignature="+OJbvH1UVDz1AVyi1k9yln2/avhL0YjCkVbbxrcF1qn4XWTiQZ4gm8rLGV92re0xw9CxCENUOWQdzFXSxcCsBQ=="/>
         </item>
     </channel>
 </rss>

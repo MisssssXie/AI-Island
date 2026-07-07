@@ -20,6 +20,11 @@ cd "$PROJECT_DIR"
 # Build Release
 # 用 ad-hoc 簽名（Sign to Run Locally），不需要對到任何 Apple Developer 憑證/帳號，
 # 也不會用到 notarize（那需要付費 Developer Program 帳號）。
+#
+# 重要：ad-hoc 簽名一定要「關掉 Hardened Runtime」。
+# 專案 Release 設定預設 ENABLE_HARDENED_RUNTIME=YES，它會開啟 Library Validation，
+# 要求所有巢狀 framework（例如 Sparkle）的 Team ID 與主程式一致。ad-hoc 沒有 Team ID，
+# dyld 會以「different Team IDs」拒絕載入 Sparkle，導致 app 一啟動就閃退（雙擊沒反應）。
 echo "正在建置 Release 版本..."
 xcodebuild -scheme ClaudeIsland \
     -configuration Release \
@@ -29,6 +34,7 @@ xcodebuild -scheme ClaudeIsland \
     DEVELOPMENT_TEAM="" \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=YES \
+    ENABLE_HARDENED_RUNTIME=NO \
     build 2>&1 | tail -5
 
 # 找到 .app
@@ -40,6 +46,22 @@ if [ -z "$APP_PATH" ]; then
 fi
 
 echo "找到 App：$APP_PATH"
+echo ""
+
+# 保險：由內而外整包重新 ad-hoc 簽名（不帶 hardened runtime）。
+# 確保主程式與所有巢狀 framework/XPC/Updater.app 的簽名一致，
+# 避免 dyld 因 Team ID 不一致而拒絕載入。
+echo "=== 重新 ad-hoc 簽名（確保巢狀 framework 一致）==="
+SPARKLE="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE" ]; then
+    codesign --force --sign - --timestamp=none \
+        "$SPARKLE/Versions/B/XPCServices/Downloader.xpc" \
+        "$SPARKLE/Versions/B/XPCServices/Installer.xpc" \
+        "$SPARKLE/Versions/B/Autoupdate" \
+        "$SPARKLE/Versions/B/Updater.app" 2>/dev/null || true
+fi
+codesign --force --deep --sign - "$APP_PATH"
+codesign --verify --deep --strict "$APP_PATH" && echo "✅ 簽名驗證通過"
 echo ""
 
 # 取得版本號
