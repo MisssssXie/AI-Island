@@ -112,14 +112,19 @@ enum ClaudePaths {
     }
 
     /// Encode a working directory path to match Claude Code's project directory naming.
-    /// Replaces `/`, `.`, and non-ASCII characters with `-`.
+    ///
+    /// Claude Code replaces every character that is NOT an ASCII letter or digit
+    /// with `-` — that includes `/`, `.`, `_`, spaces and non-ASCII. The underscore
+    /// case is easy to miss but common: `Sally_iOS` → `Sally-iOS`, `mmb_ios` →
+    /// `mmb-ios`. Keeping the underscore here produced a path that doesn't exist,
+    /// so history/content failed to load for any project with `_` in its path.
     static func encodeProjectDir(_ cwd: String) -> String {
         var result = ""
         for char in cwd {
-            if char == "/" || char == "." || !char.isASCII {
-                result += "-"
-            } else {
+            if char.isASCII && (char.isLetter || char.isNumber) {
                 result += String(char)
+            } else {
+                result += "-"
             }
         }
         return result

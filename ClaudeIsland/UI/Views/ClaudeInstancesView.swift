@@ -65,9 +65,36 @@ struct ClaudeInstancesView: View {
         }
     }
 
+    /// Number of sessions currently waiting for approval.
+    private var approvalCount: Int {
+        sessionMonitor.instances.filter { $0.phase.isWaitingForApproval }.count
+    }
+
     private var instancesList: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 2) {
+                // Batch approve when several tools are queued for approval.
+                if approvalCount > 1 {
+                    Button {
+                        sessionMonitor.approveAllPermissions()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("Approve all (\(approvalCount))")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(Capsule().fill(Color.white.opacity(0.9)))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 2)
+                }
+
                 ForEach(sortedInstances) { session in
                     InstanceRow(
                         session: session,
@@ -75,7 +102,8 @@ struct ClaudeInstancesView: View {
                         onChat: { openChat(session) },
                         onArchive: { archiveSession(session) },
                         onApprove: { approveSession(session) },
-                        onReject: { rejectSession(session) }
+                        onReject: { rejectSession(session) },
+                        onToggleAutoApprove: { sessionMonitor.toggleAutoApprove(sessionId: session.sessionId) }
                     )
                     .id(session.stableId)
                 }
@@ -88,9 +116,37 @@ struct ClaudeInstancesView: View {
     // MARK: - Actions
 
     private func focusSession(_ session: SessionState) {
+        // Codex desktop/vscode sessions live inside a GUI app, not a terminal.
+        // Match the project folder against the app's window titles and raise that
+        // specific window — merely activating the app lands on whatever window was
+        // last used, which is wrong when several projects are open (plan §1f).
+        // Both hosts accept a folder to open (VS Code natively; Codex.app declares
+        // public.folder), so when no window matches we open the project instead of
+        // merely activating the app.
+        if session.isCodex, let host = session.codexHost, host == .desktop || host == .vscode {
+            let folderName = URL(fileURLWithPath: session.cwd).lastPathComponent
+            let searchTerms = [session.projectName, folderName]
+                .filter { !$0.isEmpty }
+                .map { $0.lowercased() }
+            let bundleIdentifiers = host == .vscode
+                ? ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders"]
+                : ["com.openai.codex"]
+            let openProjectURL = URL(fileURLWithPath: session.cwd, isDirectory: true)
+            Task {
+                _ = await WindowFocuser.shared.focusGUIApp(
+                    sessionPid: session.pid,
+                    bundleIdentifiers: bundleIdentifiers,
+                    searchTerms: searchTerms,
+                    openProjectURL: openProjectURL
+                )
+                await MainActor.run { viewModel.notchClose() }
+            }
+            return
+        }
+
         Task {
             var focused = false
-            print("[focusSession] Starting: pid=\(session.pid ?? -1), projectName=\(session.projectName ?? "nil"), cwd=\(session.cwd), isInTmux=\(session.isInTmux)")
+            print("[focusSession] Starting: pid=\(session.pid ?? -1), projectName=\(session.projectName), cwd=\(session.cwd), isInTmux=\(session.isInTmux)")
 
             // Try yabai first if available and in tmux
             if session.isInTmux, await WindowFinder.shared.isYabaiAvailable() {
@@ -152,6 +208,7 @@ struct InstanceRow: View {
     let onArchive: () -> Void
     let onApprove: () -> Void
     let onReject: () -> Void
+    let onToggleAutoApprove: () -> Void
 
     @State private var isHovered = false
     @State private var spinnerPhase = 0
@@ -204,6 +261,14 @@ struct InstanceRow: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white)
                         .lineLimit(1)
+
+                    if session.isCodex {
+                        SourceBadge(session: session)
+                    }
+
+                    if session.autoApproveActive {
+                        AutoBadge()
+                    }
 
                     if session.usage.totalTokens > 0 {
                         Text(session.usage.formattedTotal)
@@ -308,6 +373,11 @@ struct InstanceRow: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
             } else {
                 HStack(spacing: 8) {
+                    // Auto-approve toggle for this session
+                    IconButton(icon: session.autoApproveActive ? "bolt.fill" : "bolt") {
+                        onToggleAutoApprove()
+                    }
+
                     // Chat icon - always show
                     IconButton(icon: "bubble.left") {
                         onChat()
@@ -379,6 +449,57 @@ struct InstanceRow: View {
         }
     }
 
+}
+
+// MARK: - Pill Badge
+
+/// Small pill-shaped icon+text badge shared by the session status badges.
+struct PillBadge: View {
+    let icon: String
+    let text: String
+    let color: Color
+    var textWeight: Font.Weight = .semibold
+    var foregroundOpacity: Double = 0.9
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 7, weight: .bold))
+            Text(text)
+                .font(.system(size: 9, weight: textWeight))
+        }
+        .foregroundColor(color.opacity(foregroundOpacity))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1.5)
+        .background(
+            Capsule().fill(color.opacity(0.15))
+        )
+    }
+}
+
+// MARK: - Source Badge
+
+/// Small badge marking a Codex session (and, when known, its host).
+/// Phase 1 uses a text/SF-Symbol badge; a proper icon lands in Phase 3.
+struct SourceBadge: View {
+    let session: SessionState
+
+    var body: some View {
+        PillBadge(
+            icon: "chevron.left.forwardslash.chevron.right",
+            text: session.codexHost?.badgeLabel ?? "codex",
+            color: TerminalColors.blue
+        )
+    }
+}
+
+// MARK: - Auto-Approve Badge
+
+/// Marks a session that auto-approves permission requests (no notch prompt).
+struct AutoBadge: View {
+    var body: some View {
+        PillBadge(icon: "bolt.fill", text: "AUTO", color: TerminalColors.amber, textWeight: .bold, foregroundOpacity: 0.95)
+    }
 }
 
 // MARK: - Inline Approval Buttons

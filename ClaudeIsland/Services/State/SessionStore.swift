@@ -36,6 +36,10 @@ actor SessionStore {
     /// Status check interval (3 seconds)
     private let statusCheckIntervalSeconds: UInt64 = 3
 
+    /// Codex desktop/vscode sessions share a long-lived engine pid, so the pid
+    /// liveness check never reaps them — archive them once idle for this long.
+    private let codexIdleArchiveSeconds: TimeInterval = 30 * 60
+
     // MARK: - Published State (for UI)
 
     /// Publisher for session state changes (nonisolated for Combine subscription from any context)
@@ -128,7 +132,9 @@ actor SessionStore {
 
         // Track new session in Mixpanel
         if isNewSession {
-            Mixpanel.mainInstance().track(event: "Session Started")
+            Mixpanel.mainInstance().track(event: "Session Started", properties: [
+                "source": event.agentSource.rawValue
+            ])
         }
 
         session.pid = event.pid
@@ -139,15 +145,41 @@ actor SessionStore {
         if let tty = event.tty {
             session.tty = tty.replacingOccurrences(of: "/dev/", with: "")
         }
+        // Codex: keep transcript path / host fresh (resume swaps the rollout file).
+        if let transcriptPath = event.transcriptPath {
+            session.transcriptPath = transcriptPath
+        }
+        if let host = CodexHost.from(event.codexHost) {
+            session.codexHost = host
+        }
         session.lastActivity = Date()
 
         if event.status == "ended" {
             sessions.removeValue(forKey: sessionId)
             cancelPendingSync(sessionId: sessionId)
+            if session.source == .codex {
+                await CodexConversationParser.shared.resetState(for: sessionId)
+            }
             return
         }
 
-        let newPhase = event.determinePhase()
+        // Auto-approval: if the policy says yes, respond "allow" over the socket
+        // (via the same path as manual approval — the pending was already
+        // registered by HookSocketServer) and skip waitingForApproval entirely,
+        // so the notch never expands and no attention sound fires (plan §4b).
+        let autoApprove = event.expectsResponse && AutoApprovalPolicy.shouldAutoApprove(
+            source: session.source,
+            tool: event.tool,
+            toolInput: event.toolInput,
+            mode: session.effectiveAutoApprovalMode,
+            denyPatterns: AppSettings.autoApproveDenyPatterns
+        )
+        if autoApprove, let toolUseId = event.toolUseId {
+            HookSocketServer.shared.respondToPermission(toolUseId: toolUseId, decision: "allow")
+            Self.logger.info("auto-approved \(event.tool ?? "?", privacy: .public) for \(sessionId.prefix(8), privacy: .public)")
+        }
+
+        let newPhase: SessionPhase = autoApprove ? .processing : event.determinePhase()
 
         if session.phase.canTransition(to: newPhase) {
             session.phase = newPhase
@@ -155,16 +187,24 @@ actor SessionStore {
             Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: newPhase), privacy: .public), ignoring")
         }
 
-        if event.event == "PermissionRequest", let toolUseId = event.toolUseId {
-            Self.logger.debug("Setting tool \(toolUseId.prefix(12), privacy: .public) status to waitingForApproval")
-            updateToolStatus(in: &session, toolId: toolUseId, status: .waitingForApproval)
-        }
+        // Claude drives its chat items (tool placeholders, subagents) from hook
+        // events. Codex chat content is built entirely by CodexConversationParser
+        // from the rollout — its hook tool ids don't match rollout call_ids, so
+        // hook-driven placeholders would duplicate. Codex hooks only drive phase.
+        if session.source == .claude {
+            if event.event == "PermissionRequest", let toolUseId = event.toolUseId {
+                // Auto-approved tools go straight to running; keep the manual
+                // path unchanged (waitingForApproval).
+                let status: ToolStatus = autoApprove ? .running : .waitingForApproval
+                updateToolStatus(in: &session, toolId: toolUseId, status: status)
+            }
 
-        processToolTracking(event: event, session: &session)
-        processSubagentTracking(event: event, session: &session)
+            processToolTracking(event: event, session: &session)
+            processSubagentTracking(event: event, session: &session)
 
-        if event.event == "Stop" {
-            session.subagentState = SubagentState()
+            if event.event == "Stop" {
+                session.subagentState = SubagentState()
+            }
         }
 
         sessions[sessionId] = session
@@ -180,6 +220,9 @@ actor SessionStore {
             sessionId: event.sessionId,
             cwd: event.cwd,
             projectName: URL(fileURLWithPath: event.cwd).lastPathComponent,
+            source: event.agentSource,
+            transcriptPath: event.transcriptPath,
+            codexHost: CodexHost.from(event.codexHost),
             pid: event.pid,
             tty: event.tty?.replacingOccurrences(of: "/dev/", with: ""),
             isInTmux: false,  // Will be updated
@@ -379,41 +422,34 @@ actor SessionStore {
 
     // MARK: - Permission Processing
 
-    private func processPermissionApproved(sessionId: String, toolUseId: String) async {
+    /// Shared "resolve a pending permission" flow for approve/deny: mark the
+    /// tool's status, then either advance to the next pending permission or
+    /// fall back to `.processing` if none remain.
+    private func advancePastPermission(sessionId: String, toolUseId: String, resolvedStatus: ToolStatus, logSuffix: String = "") async {
         guard var session = sessions[sessionId] else { return }
 
-        // Update tool status in chat history first
-        updateToolStatus(in: &session, toolId: toolUseId, status: .running)
+        updateToolStatus(in: &session, toolId: toolUseId, status: resolvedStatus)
 
         // Check if there are other tools still waiting for approval
-        if let nextPending = findNextPendingTool(in: session, excluding: toolUseId) {
+        if let nextContext = nextPermissionContext(for: session, excluding: toolUseId) {
             // Another tool is waiting - stay in waitingForApproval with that tool's context
-            let newPhase = SessionPhase.waitingForApproval(PermissionContext(
-                toolUseId: nextPending.id,
-                toolName: nextPending.name,
-                toolInput: nil,  // We don't have the input stored in chatItems
-                receivedAt: nextPending.timestamp
-            ))
+            let newPhase = SessionPhase.waitingForApproval(nextContext)
             if session.phase.canTransition(to: newPhase) {
                 session.phase = newPhase
-                Self.logger.debug("Switched to next pending tool: \(nextPending.id.prefix(12), privacy: .public)")
+                Self.logger.debug("Switched to next pending permission\(logSuffix): \(nextContext.toolUseId.prefix(12), privacy: .public)")
             }
-        } else {
-            // No more pending tools - transition to processing
-            if case .waitingForApproval(let ctx) = session.phase, ctx.toolUseId == toolUseId {
-                if session.phase.canTransition(to: .processing) {
-                    session.phase = .processing
-                }
-            } else if case .waitingForApproval = session.phase {
-                // The approved tool wasn't the one in phase context, but no others pending
-                // This can happen if tools were approved out of order
-                if session.phase.canTransition(to: .processing) {
-                    session.phase = .processing
-                }
+        } else if case .waitingForApproval = session.phase {
+            // No more pending permissions - transition to processing
+            if session.phase.canTransition(to: .processing) {
+                session.phase = .processing
             }
         }
 
         sessions[sessionId] = session
+    }
+
+    private func processPermissionApproved(sessionId: String, toolUseId: String) async {
+        await advancePastPermission(sessionId: sessionId, toolUseId: toolUseId, resolvedStatus: .running)
     }
 
     // MARK: - Tool Completion Processing
@@ -451,19 +487,11 @@ actor SessionStore {
         // Update session phase if needed
         // If the completed tool was the one in the phase context, switch to next pending or processing
         if case .waitingForApproval(let ctx) = session.phase, ctx.toolUseId == toolUseId {
-            if let nextPending = findNextPendingTool(in: session, excluding: toolUseId) {
-                let newPhase = SessionPhase.waitingForApproval(PermissionContext(
-                    toolUseId: nextPending.id,
-                    toolName: nextPending.name,
-                    toolInput: nil,
-                    receivedAt: nextPending.timestamp
-                ))
-                session.phase = newPhase
-                Self.logger.debug("Switched to next pending tool after completion: \(nextPending.id.prefix(12), privacy: .public)")
-            } else {
-                if session.phase.canTransition(to: .processing) {
-                    session.phase = .processing
-                }
+            if let nextContext = nextPermissionContext(for: session, excluding: toolUseId) {
+                session.phase = .waitingForApproval(nextContext)
+                Self.logger.debug("Switched to next pending permission after completion: \(nextContext.toolUseId.prefix(12), privacy: .public)")
+            } else if session.phase.canTransition(to: .processing) {
+                session.phase = .processing
             }
         }
 
@@ -481,40 +509,37 @@ actor SessionStore {
         return nil
     }
 
-    private func processPermissionDenied(sessionId: String, toolUseId: String, reason: String?) async {
-        guard var session = sessions[sessionId] else { return }
-
-        // Update tool status in chat history first
-        updateToolStatus(in: &session, toolId: toolUseId, status: .error)
-
-        // Check if there are other tools still waiting for approval
-        if let nextPending = findNextPendingTool(in: session, excluding: toolUseId) {
-            // Another tool is waiting - stay in waitingForApproval with that tool's context
-            let newPhase = SessionPhase.waitingForApproval(PermissionContext(
-                toolUseId: nextPending.id,
-                toolName: nextPending.name,
-                toolInput: nil,
-                receivedAt: nextPending.timestamp
-            ))
-            if session.phase.canTransition(to: newPhase) {
-                session.phase = newPhase
-                Self.logger.debug("Switched to next pending tool after denial: \(nextPending.id.prefix(12), privacy: .public)")
-            }
-        } else {
-            // No more pending tools - transition to processing (Claude will handle denial)
-            if case .waitingForApproval(let ctx) = session.phase, ctx.toolUseId == toolUseId {
-                if session.phase.canTransition(to: .processing) {
-                    session.phase = .processing
-                }
-            } else if case .waitingForApproval = session.phase {
-                // The denied tool wasn't the one in phase context, but no others pending
-                if session.phase.canTransition(to: .processing) {
-                    session.phase = .processing
-                }
-            }
+    /// The next permission still awaiting a decision after `toolUseId` is resolved.
+    ///
+    /// Claude tracks pending permissions as waitingForApproval chat items, so we
+    /// scan those. Codex has no such items (its chat is built from the rollout,
+    /// whose call_ids don't match hook ids) — so for Codex we consult the socket
+    /// server's live pending map, otherwise concurrent Codex permission requests
+    /// would be stranded (button vanishes, hook blocks until timeout).
+    private func nextPermissionContext(for session: SessionState, excluding toolUseId: String) -> PermissionContext? {
+        if session.source == .codex {
+            guard let next = HookSocketServer.shared.nextPendingPermission(
+                sessionId: session.sessionId, excluding: toolUseId
+            ) else { return nil }
+            return PermissionContext(
+                toolUseId: next.toolUseId,
+                toolName: next.toolName ?? "unknown",
+                toolInput: next.toolInput,
+                receivedAt: next.receivedAt
+            )
         }
 
-        sessions[sessionId] = session
+        guard let nextPending = findNextPendingTool(in: session, excluding: toolUseId) else { return nil }
+        return PermissionContext(
+            toolUseId: nextPending.id,
+            toolName: nextPending.name,
+            toolInput: nil,
+            receivedAt: nextPending.timestamp
+        )
+    }
+
+    private func processPermissionDenied(sessionId: String, toolUseId: String, reason: String?) async {
+        await advancePastPermission(sessionId: sessionId, toolUseId: toolUseId, resolvedStatus: .error, logSuffix: " after denial")
     }
 
     private func processSocketFailure(sessionId: String, toolUseId: String) async {
@@ -524,26 +549,16 @@ actor SessionStore {
         updateToolStatus(in: &session, toolId: toolUseId, status: .error)
 
         // Check if there are other tools still waiting for approval
-        if let nextPending = findNextPendingTool(in: session, excluding: toolUseId) {
+        if let nextContext = nextPermissionContext(for: session, excluding: toolUseId) {
             // Another tool is waiting - switch to that tool's context
-            let newPhase = SessionPhase.waitingForApproval(PermissionContext(
-                toolUseId: nextPending.id,
-                toolName: nextPending.name,
-                toolInput: nil,
-                receivedAt: nextPending.timestamp
-            ))
+            let newPhase = SessionPhase.waitingForApproval(nextContext)
             if session.phase.canTransition(to: newPhase) {
                 session.phase = newPhase
-                Self.logger.debug("Switched to next pending tool after socket failure: \(nextPending.id.prefix(12), privacy: .public)")
+                Self.logger.debug("Switched to next pending permission after socket failure: \(nextContext.toolUseId.prefix(12), privacy: .public)")
             }
-        } else {
-            // No more pending tools - clear permission state
-            if case .waitingForApproval(let ctx) = session.phase, ctx.toolUseId == toolUseId {
-                session.phase = .idle
-            } else if case .waitingForApproval = session.phase {
-                // The failed tool wasn't in phase context, but no others pending
-                session.phase = .idle
-            }
+        } else if case .waitingForApproval = session.phase {
+            // No more pending permissions - clear permission state
+            session.phase = .idle
         }
 
         sessions[sessionId] = session
@@ -554,11 +569,19 @@ actor SessionStore {
     private func processFileUpdate(_ payload: FileUpdatePayload) async {
         guard var session = sessions[payload.sessionId] else { return }
 
-        // Update conversationInfo from JSONL (summary, lastMessage, etc.)
-        let conversationInfo = await ConversationParser.shared.parse(
-            sessionId: payload.sessionId,
-            cwd: session.cwd
-        )
+        // Update conversationInfo from the transcript (summary, lastMessage, tokens).
+        let conversationInfo: ConversationInfo
+        if session.source == .codex, let transcriptPath = session.transcriptPath {
+            conversationInfo = await CodexConversationParser.shared.conversationInfo(
+                sessionId: payload.sessionId,
+                transcriptPath: transcriptPath
+            )
+        } else {
+            conversationInfo = await ConversationParser.shared.parse(
+                sessionId: payload.sessionId,
+                cwd: session.cwd
+            )
+        }
         session.conversationInfo = conversationInfo
 
         // Handle /clear reconciliation - remove items that no longer exist in parser state
@@ -681,12 +704,15 @@ actor SessionStore {
 
         session.toolTracker.lastSyncTime = Date()
 
-        await populateSubagentToolsFromAgentFiles(
-            sessionId: payload.sessionId,
-            session: &session,
-            cwd: payload.cwd,
-            structuredResults: payload.structuredResults
-        )
+        // Task/Agent subagent nesting is Claude-specific (agent JSONL files).
+        if session.source == .claude {
+            await populateSubagentToolsFromAgentFiles(
+                sessionId: payload.sessionId,
+                session: &session,
+                cwd: payload.cwd,
+                structuredResults: payload.structuredResults
+            )
+        }
 
         sessions[payload.sessionId] = session
 
@@ -926,13 +952,39 @@ actor SessionStore {
     // MARK: - Session End Processing
 
     private func processSessionEnd(sessionId: String) async {
-        sessions.removeValue(forKey: sessionId)
+        let session = sessions.removeValue(forKey: sessionId)
         cancelPendingSync(sessionId: sessionId)
+        if session?.source == .codex {
+            await CodexConversationParser.shared.resetState(for: sessionId)
+        }
     }
 
     // MARK: - History Loading
 
     private func loadHistoryFromFile(sessionId: String, cwd: String) async {
+        // Codex sessions load their history from the rollout JSONL.
+        if let session = sessions[sessionId], session.source == .codex,
+           let transcriptPath = session.transcriptPath {
+            let messages = await CodexConversationParser.shared.parseFullConversation(
+                sessionId: sessionId, transcriptPath: transcriptPath
+            )
+            let completedTools = await CodexConversationParser.shared.completedToolIds(for: sessionId)
+            let toolResults = await CodexConversationParser.shared.toolResults(for: sessionId)
+            let structuredResults = await CodexConversationParser.shared.structuredResults(for: sessionId)
+            let conversationInfo = await CodexConversationParser.shared.conversationInfo(
+                sessionId: sessionId, transcriptPath: transcriptPath
+            )
+            await process(.historyLoaded(
+                sessionId: sessionId,
+                messages: messages,
+                completedTools: completedTools,
+                toolResults: toolResults,
+                structuredResults: structuredResults,
+                conversationInfo: conversationInfo
+            ))
+            return
+        }
+
         // Parse file asynchronously
         let messages = await ConversationParser.shared.parseFullConversation(
             sessionId: sessionId,
@@ -1006,6 +1058,40 @@ actor SessionStore {
         // Cancel existing sync
         cancelPendingSync(sessionId: sessionId)
 
+        // Codex sessions parse their rollout JSONL (transcript_path) instead of a
+        // cwd-derived Claude path.
+        if let session = sessions[sessionId], session.source == .codex {
+            guard let transcriptPath = session.transcriptPath else { return }
+            pendingSyncs[sessionId] = Task { [weak self, syncDebounceNs] in
+                try? await Task.sleep(nanoseconds: syncDebounceNs)
+                guard !Task.isCancelled else { return }
+
+                let result = await CodexConversationParser.shared.parseIncremental(
+                    sessionId: sessionId,
+                    transcriptPath: transcriptPath
+                )
+
+                if result.interruptDetected {
+                    await self?.process(.interruptDetected(sessionId: sessionId))
+                }
+
+                // Always drive a fileUpdated (even with no new messages): it
+                // refreshes token/last-message info and reconciles tool
+                // completions against results that arrived in this read.
+                let payload = FileUpdatePayload(
+                    sessionId: sessionId,
+                    cwd: cwd,
+                    messages: result.newMessages,
+                    isIncremental: true,
+                    completedToolIds: result.completedToolIds,
+                    toolResults: result.toolResults,
+                    structuredResults: result.structuredResults
+                )
+                await self?.process(.fileUpdated(payload))
+            }
+            return
+        }
+
         // Schedule new debounced sync
         pendingSyncs[sessionId] = Task { [weak self, syncDebounceNs] in
             try? await Task.sleep(nanoseconds: syncDebounceNs)
@@ -1069,23 +1155,44 @@ actor SessionStore {
     }
 
     /// Recheck status of all active sessions
-    private func recheckAllSessions() {
+    private func recheckAllSessions() async {
         var removedSession = false
 
         for (sessionId, session) in Array(sessions) {
             if session.phase == .ended {
                 sessions.removeValue(forKey: sessionId)
                 cancelPendingSync(sessionId: sessionId)
+                if session.source == .codex {
+                    await CodexConversationParser.shared.resetState(for: sessionId)
+                }
                 removedSession = true
                 continue
             }
 
-            if let pid = session.pid {
+            // Codex desktop/vscode: long-lived engine pid — reap on idle timeout
+            // instead of pid liveness (which would keep them forever).
+            let isPersistentCodex = session.source == .codex
+                && (session.codexHost.map { !$0.hasEphemeralProcess } ?? false)
+            if isPersistentCodex {
+                let idle = Date().timeIntervalSince(session.lastActivity)
+                let archivable = session.phase == .idle || session.phase == .waitingForInput
+                if archivable && idle > codexIdleArchiveSeconds {
+                    Self.logger.info("Archiving idle Codex desktop session \(sessionId.prefix(8))")
+                    sessions.removeValue(forKey: sessionId)
+                    cancelPendingSync(sessionId: sessionId)
+                    await CodexConversationParser.shared.resetState(for: sessionId)
+                    removedSession = true
+                    continue
+                }
+            } else if let pid = session.pid {
                 let isRunning = isProcessRunning(pid: pid)
                 if !isRunning {
                     Self.logger.info("Process \(pid) no longer running, ending session \(sessionId.prefix(8))")
                     sessions.removeValue(forKey: sessionId)
                     cancelPendingSync(sessionId: sessionId)
+                    if session.source == .codex {
+                        await CodexConversationParser.shared.resetState(for: sessionId)
+                    }
                     removedSession = true
                     continue
                 }
@@ -1116,8 +1223,27 @@ actor SessionStore {
     // MARK: - State Publishing
 
     private func publishState() {
-        let sortedSessions = Array(sessions.values).sorted { $0.projectName < $1.projectName }
+        var values = Array(sessions.values)
+        // Hide Codex sessions when detection is disabled.
+        if !AppSettings.enableCodexDetection {
+            values.removeAll { $0.source == .codex }
+        }
+        let sortedSessions = values.sorted { $0.projectName < $1.projectName }
         sessionsSubject.send(sortedSessions)
+    }
+
+    /// Force a state republish (e.g. after toggling Codex detection, which
+    /// changes which sessions are filtered out in publishState).
+    func refreshPublish() {
+        publishState()
+    }
+
+    /// Set the per-session auto-approval override (nil = follow global).
+    func setAutoApproveOverride(sessionId: String, _ value: Bool?) {
+        guard var session = sessions[sessionId] else { return }
+        session.autoApproveOverride = value
+        sessions[sessionId] = session
+        publishState()
     }
 
     // MARK: - Queries

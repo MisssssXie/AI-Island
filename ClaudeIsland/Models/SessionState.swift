@@ -17,6 +17,18 @@ struct SessionState: Equatable, Identifiable, Sendable {
     let cwd: String
     let projectName: String
 
+    // MARK: - Agent Source
+
+    /// Which agent owns this session (Claude Code vs Codex). Defaults to `.claude`.
+    let source: AgentSource
+
+    /// Codex rollout JSONL path (set from hook payloads). Claude leaves this nil
+    /// and derives its path from cwd + sessionId instead.
+    var transcriptPath: String?
+
+    /// Which Codex host launched this session (nil for Claude).
+    var codexHost: CodexHost?
+
     // MARK: - Instance Metadata
 
     var pid: Int?
@@ -53,6 +65,13 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// This removes pre-/clear items that no longer exist in the JSONL
     var needsClearReconciliation: Bool
 
+    // MARK: - Auto Approval
+
+    /// Per-session override for auto-approval. nil = follow the global setting,
+    /// true = auto-approve this session, false = always prompt this session.
+    /// Runtime-only (not persisted).
+    var autoApproveOverride: Bool?
+
     // MARK: - Timestamps
 
     var lastActivity: Date
@@ -68,6 +87,9 @@ struct SessionState: Equatable, Identifiable, Sendable {
         sessionId: String,
         cwd: String,
         projectName: String? = nil,
+        source: AgentSource = .claude,
+        transcriptPath: String? = nil,
+        codexHost: CodexHost? = nil,
         pid: Int? = nil,
         tty: String? = nil,
         isInTmux: Bool = false,
@@ -80,12 +102,16 @@ struct SessionState: Equatable, Identifiable, Sendable {
             lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil, lastUserMessageDate: nil
         ),
         needsClearReconciliation: Bool = false,
+        autoApproveOverride: Bool? = nil,
         lastActivity: Date = Date(),
         createdAt: Date = Date()
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.projectName = projectName ?? URL(fileURLWithPath: cwd).lastPathComponent
+        self.source = source
+        self.transcriptPath = transcriptPath
+        self.codexHost = codexHost
         self.pid = pid
         self.tty = tty
         self.isInTmux = isInTmux
@@ -95,11 +121,31 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.subagentState = subagentState
         self.conversationInfo = conversationInfo
         self.needsClearReconciliation = needsClearReconciliation
+        self.autoApproveOverride = autoApproveOverride
         self.lastActivity = lastActivity
         self.createdAt = createdAt
     }
 
     // MARK: - Derived Properties
+
+    /// Whether this session is a Codex session.
+    var isCodex: Bool { source == .codex }
+
+    /// Effective auto-approval mode: per-session override wins over the global.
+    var effectiveAutoApprovalMode: AutoApprovalMode {
+        if let override = autoApproveOverride {
+            return override ? .all : .off
+        }
+        return AppSettings.autoApprovalMode
+    }
+
+    /// Whether this session will auto-approve without prompting for most tools
+    /// (drives the AUTO badge). `.safeTools` only auto-approves a subset, so it
+    /// deliberately doesn't claim a blanket AUTO badge. `override == true`
+    /// already resolves to `.all`, so `.all` covers it.
+    var autoApproveActive: Bool {
+        effectiveAutoApprovalMode == .all
+    }
 
     /// Whether this session needs user attention
     var needsAttention: Bool {

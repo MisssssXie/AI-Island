@@ -11,7 +11,8 @@
 
 - **瀏海 UI** — 從 MacBook 瀏海位置展開的動畫覆蓋層
 - **即時 Session 監控** — 同時追蹤多個 Claude Code session 的狀態
-- **權限審批** — 直接在瀏海上批准或拒絕工具執行，不需要切換到終端機，或是開啟Auto自動核准模式
+- **權限審批** — 直接在瀏海上批准或拒絕工具執行，不需要切換到終端機
+- **Codex 支援** — 同時偵測 OpenAI Codex（CLI／桌面版／VS Code）session，共用同一套瀏海
 - **聊天記錄** — 查看完整對話歷史，支援 Markdown 渲染
 - **自動安裝** — 首次啟動時自動安裝 Hooks
 
@@ -19,6 +20,23 @@
 
 - macOS 15.6+
 - Claude Code CLI
+- （選用）Codex CLI 0.140.0+ 或 Codex 桌面版
+
+## Codex 支援
+
+Claude Island 也能偵測 **OpenAI Codex** 的 session，涵蓋 Codex CLI（終端機）、
+Codex 桌面版與 VS Code 擴充，全部共用同一條瀏海列表、狀態、權限批准與聊天歷史。
+
+1. **開啟偵測**：若安裝時已存在 `~/.codex`，Codex 偵測預設開啟。也可在瀏海選單的
+   **Codex Detection** 開關手動切換（關閉時會移除 Codex hooks 並隱藏 Codex session）。
+2. **信任 hooks**：Codex 基於安全考量，對新安裝的 hooks 需要使用者信任才會執行。
+   在 Codex 中執行 `/hooks` 指令並信任 Claude Island 的 hook（每個 Codex profile
+   各需一次，例如 `~/.codex` 與 `~/.codex-work`）。未信任前，瀏海選單會顯示
+   「Trust Codex hooks」提示，點擊即可複製 `/hooks` 指令。
+3. **桌面版**：桌面版 session 因為共用長駐引擎程序，改以「閒置逾時自動歸檔」
+   （預設 30 分鐘）取代 CLI 的程序存活偵測。
+
+> Codex 的偵測與 Claude 完全獨立，兩者可同時運作、互不干擾。
 
 ## 安裝
 

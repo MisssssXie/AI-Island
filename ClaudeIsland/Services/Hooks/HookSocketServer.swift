@@ -26,6 +26,15 @@ struct HookEvent: Codable, Sendable {
     let notificationType: String?
     let message: String?
 
+    // MARK: - Codex fields (all optional; absent on Claude payloads)
+
+    /// "claude" | "codex" — nil is treated as claude everywhere.
+    let source: String?
+    /// Codex rollout JSONL path (points straight at the transcript).
+    let transcriptPath: String?
+    /// "cli" | "desktop" | "vscode" | "exec" for Codex sessions.
+    let codexHost: String?
+
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case cwd, event, status, pid, tty, tool
@@ -33,10 +42,19 @@ struct HookEvent: Codable, Sendable {
         case toolUseId = "tool_use_id"
         case notificationType = "notification_type"
         case message
+        case source
+        case transcriptPath = "transcript_path"
+        case codexHost = "codex_host"
     }
 
+    /// Resolved agent source (defaults to claude).
+    var agentSource: AgentSource { AgentSource.from(source) }
+
+    /// Whether this event came from a Codex session.
+    var isCodex: Bool { agentSource == .codex }
+
     /// Create a copy with updated toolUseId
-    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?) {
+    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, source: String? = nil, transcriptPath: String? = nil, codexHost: String? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.event = event
@@ -48,6 +66,9 @@ struct HookEvent: Codable, Sendable {
         self.toolUseId = toolUseId
         self.notificationType = notificationType
         self.message = message
+        self.source = source
+        self.transcriptPath = transcriptPath
+        self.codexHost = codexHost
     }
 
     var sessionPhase: SessionPhase {
@@ -250,6 +271,25 @@ class HookSocketServer {
         return (pending.event.tool, pending.toolUseId, pending.event.toolInput)
     }
 
+    /// Oldest still-pending permission for a session, excluding one toolUseId.
+    ///
+    /// Codex fires one PermissionRequest per exec_command, so several can be
+    /// blocked on the socket at once. Codex sessions don't create
+    /// waitingForApproval chat items, so SessionStore can't find the queued
+    /// requests by scanning chatItems — it consults this live pending map to
+    /// re-surface the next one after the user resolves the current one.
+    /// Returns oldest-first so concurrent requests are approved in arrival order.
+    func nextPendingPermission(sessionId: String, excluding toolUseId: String? = nil)
+        -> (toolUseId: String, toolName: String?, toolInput: [String: AnyCodable]?, receivedAt: Date)? {
+        permissionsLock.lock()
+        defer { permissionsLock.unlock() }
+        let next = pendingPermissions.values
+            .filter { $0.sessionId == sessionId && $0.toolUseId != toolUseId }
+            .min { $0.receivedAt < $1.receivedAt }
+        guard let pending = next else { return nil }
+        return (pending.toolUseId, pending.event.tool, pending.event.toolInput, pending.receivedAt)
+    }
+
     /// Cancel a specific pending permission by toolUseId (when tool completes via terminal approval)
     func cancelPendingPermission(toolUseId: String) {
         queue.async { [weak self] in
@@ -427,6 +467,13 @@ class HookSocketServer {
                 toolUseId = eventToolUseId
             } else if let cachedToolUseId = popCachedToolUseId(event: event) {
                 toolUseId = cachedToolUseId
+            } else if event.isCodex {
+                // Codex fires PermissionRequest before (or without) PreToolUse, so
+                // the PreToolUse cache misses. Synthesise an id and keep the socket
+                // open anyway — approval/denial round-trips over the socket and does
+                // not depend on a real tool_use_id (plan §5.3).
+                toolUseId = "codex-perm-\(UUID().uuidString)"
+                logger.debug("Codex permission request - synthesised id \(toolUseId.prefix(20), privacy: .public) for \(event.sessionId.prefix(8), privacy: .public)")
             } else {
                 logger.warning("Permission request missing tool_use_id for \(event.sessionId.prefix(8), privacy: .public) - no cache hit")
                 close(clientSocket)
@@ -447,7 +494,10 @@ class HookSocketServer {
                 toolInput: event.toolInput,
                 toolUseId: toolUseId,  // Use resolved toolUseId
                 notificationType: event.notificationType,
-                message: event.message
+                message: event.message,
+                source: event.source,
+                transcriptPath: event.transcriptPath,
+                codexHost: event.codexHost
             )
 
             let pending = PendingPermission(

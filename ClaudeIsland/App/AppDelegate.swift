@@ -68,6 +68,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Mixpanel.mainInstance().flush()
 
         HookInstaller.installIfNeeded()
+        // Resolve the (possibly filesystem-derived) default once and persist it,
+        // so later reads — e.g. every publishState — hit a stored bool instead of
+        // re-stat'ing ~/.codex.
+        let codexEnabled = AppSettings.enableCodexDetection
+        AppSettings.enableCodexDetection = codexEnabled
+        if codexEnabled {
+            // Codex install spawns `codex --version` + `which python3` and scans/
+            // writes every home — keep it off the launch path (plan §5.8).
+            DispatchQueue.global(qos: .utility).async {
+                CodexHookInstaller.installIfNeeded()
+            }
+        }
         NSApplication.shared.setActivationPolicy(.accessory)
 
         windowManager = WindowManager()
