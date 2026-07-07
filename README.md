@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="img/128.png" alt="Claude Island" width="128" height="128">
+  <img src="img/128.png" alt="AI Island" width="128" height="128">
   <h3>AI-Island</h3>
   <p>這是基於 <a href="https://github.com/sherry30219-byte/claude-island-modify">claude-island-modify</a> 進行的調整版本，詳細修改項目以及安裝方法可以查看下方 Fork。</p>
-  <a href="https://github.com/sherry30219-byte/claude-island-modify/releases/latest">
+  <a href="https://github.com/MisssssXie/AI-Island/releases/latest">
     <img src="https://img.shields.io/badge/下載-DMG-blue?style=for-the-badge" alt="下載 DMG" />
   </a>
 </div>
@@ -24,13 +24,13 @@
 
 ## Codex 支援
 
-Claude Island 也能偵測 **OpenAI Codex** 的 session，涵蓋 Codex CLI（終端機）、
+AI Island 也能偵測 **OpenAI Codex** 的 session，涵蓋 Codex CLI（終端機）、
 Codex 桌面版與 VS Code 擴充，全部共用同一條瀏海列表、狀態、權限批准與聊天歷史。
 
 1. **開啟偵測**：若安裝時已存在 `~/.codex`，Codex 偵測預設開啟。也可在瀏海選單的
    **Codex Detection** 開關手動切換（關閉時會移除 Codex hooks 並隱藏 Codex session）。
 2. **信任 hooks**：Codex 基於安全考量，對新安裝的 hooks 需要使用者信任才會執行。
-   在 Codex 中執行 `/hooks` 指令並信任 Claude Island 的 hook（每個 Codex profile
+   在 Codex 中執行 `/hooks` 指令並信任 AI Island 的 hook（每個 Codex profile
    各需一次，例如 `~/.codex` 與 `~/.codex-work`）。未信任前，瀏海選單會顯示
    「Trust Codex hooks」提示，點擊即可複製 `/hooks` 指令。
 3. **桌面版**：桌面版 session 因為共用長駐引擎程序，改以「閒置逾時自動歸檔」
@@ -42,26 +42,26 @@ Codex 桌面版與 VS Code 擴充，全部共用同一條瀏海列表、狀態�
 
 ### 方法一：下載 DMG（推薦）
 
-[點擊下載最新版本](https://github.com/sherry30219-byte/claude-island-modify/releases/latest)
+[點擊下載最新版本](https://github.com/MisssssXie/AI-Island/releases/latest)
 
 1. 下載 `.dmg` 檔案
-2. 打開 DMG，將 **Claude Island** 拖到 **Applications** 資料夾
-3. 再去雙擊 App 打開 Claude Island，此時**首次打開會出現警告 ⚠️，先不要丟垃圾桶！**
+2. 打開 DMG，將 **AI Island** 拖到 **Applications** 資料夾
+3. 再去雙擊 App 打開 AI Island，此時**首次打開會出現警告 ⚠️，先不要丟垃圾桶！**
    因為此版本沒有 Apple Developer 簽名，加入 Apple Developer Program 一年要 $99 USD
 4. 請依照以下方式解除：
-   - 方式 A：到 **系統設定 → 隱私權與安全性**，往下滑找到「已阻擋 Claude Island」，點擊 **強制打開**
+   - 方式 A：到 **系統設定 → 隱私權與安全性**，往下滑找到「已阻擋 AI Island」，點擊 **強制打開**
    
    - 方式 B：打開終端機，輸入以下指令後即可正常打開：
      ```bash
-     xattr -cr /Applications/Claude\ Island.app
+     xattr -cr /Applications/AI\ Island.app
      ```
-4. 開啟**輔助使用權限**（視窗切換功能需要）：系統設定 → 隱私權與安全性 → 輔助使用 → 加入 Claude Island 並開啟
+4. 開啟**輔助使用權限**（視窗切換功能需要）：系統設定 → 隱私權與安全性 → 輔助使用 → 加入 AI Island 並開啟
 
 ### 方法二：從原始碼建置
 
 ```bash
-git clone https://github.com/sherry30219-byte/claude-island-modify.git
-cd claude-island-modify
+git clone https://github.com/MisssssXie/AI-Island.git
+cd AI-Island
 ```
 
 1. 雙擊 `ClaudeIsland.xcodeproj` 開啟 Xcode
@@ -71,7 +71,7 @@ cd claude-island-modify
 
 ## 運作方式
 
-Claude Island 會在 `~/.claude/hooks/` 安裝 hooks，透過 Unix socket 傳遞 session 狀態。應用程式監聽事件並在瀏海覆蓋層上顯示。
+AI Island 會在 `~/.claude/hooks/` 安裝 hooks，透過 Unix socket 傳遞 session 狀態。應用程式監聽事件並在瀏海覆蓋層上顯示。
 
 當 Claude 需要執行工具的權限時，瀏海會展開並顯示批准/拒絕按鈕，不需要切換到終端機。
 
