@@ -1,7 +1,7 @@
 <div align="center">
   <img src="img/128.png" alt="Claude Island" width="128" height="128">
   <h3>AI-Island</h3>
-  <p>這是基於 <a href="https://github.com/sherry30219-byte/claude-island-modify">claude-island</a> 進行的調整版本，詳細修改項目以及安裝方法可以查看下方 Fork。</p>
+  <p>這是基於 <a href="https://github.com/sherry30219-byte/claude-island-modify">claude-island-modify</a> 進行的調整版本，詳細修改項目以及安裝方法可以查看下方 Fork。</p>
   <a href="https://github.com/sherry30219-byte/claude-island-modify/releases/latest">
     <img src="https://img.shields.io/badge/下載-DMG-blue?style=for-the-badge" alt="下載 DMG" />
   </a>
