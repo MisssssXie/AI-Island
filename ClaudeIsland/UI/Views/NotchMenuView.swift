@@ -135,6 +135,8 @@ struct NotchMenuView: View {
                     .padding(.vertical, 4)
 
                 // About
+                VersionRow()
+
                 MenuRow(
                     icon: "star",
                     label: "Original Source on GitHub"
@@ -265,6 +267,39 @@ struct HideShortcutRow: View {
             Spacer()
 
             Text("⌃⌥X ×2")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.4))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+}
+
+// MARK: - Version Row
+
+/// Informational row showing the current app version and build number,
+/// e.g. "1.6.0(20260708)".
+struct VersionRow: View {
+    private var versionString: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(version)(\(build))"
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 16)
+
+            Text("Version")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+
+            Spacer()
+
+            Text(versionString)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white.opacity(0.4))
         }
