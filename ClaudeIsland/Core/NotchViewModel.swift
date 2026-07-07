@@ -47,6 +47,10 @@ class NotchViewModel: ObservableObject {
     @Published var isHovering: Bool = false
     @Published var sessionCount: Int = 0
 
+    /// User-toggled hide (minimize button / triple-tap "c"). When true the
+    /// island renders fully transparent so it stops covering content behind it.
+    @Published var isManuallyHidden: Bool = false
+
     // MARK: - Dependencies
 
     private let screenSelector = ScreenSelector.shared

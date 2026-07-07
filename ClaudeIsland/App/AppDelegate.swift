@@ -6,6 +6,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var screenObserver: ScreenObserver?
     private var updateCheckTimer: Timer?
+    private var hideShortcutMonitor: HideShortcutMonitor?
 
     static var shared: AppDelegate?
     let updater: SPUUpdater
@@ -61,6 +62,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleScreenChange()
         }
 
+        // Control+Option + triple-tap "x" (⌃⌥X ×2) hides / shows the island
+        // (same as the minimize button), so it stops covering web content when
+        // you need the space.
+        hideShortcutMonitor = HideShortcutMonitor { [weak self] in
+            self?.toggleIslandHidden()
+        }
+        hideShortcutMonitor?.start()
+
         if updater.canCheckForUpdates {
             updater.checkForUpdates()
         }
@@ -75,9 +84,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         _ = windowManager?.setupNotchWindow()
     }
 
+    /// Flip the island's manual-hide flag (reuses the minimize-button flag).
+    /// NSEvent monitor callbacks are delivered on the main thread, so it's safe
+    /// to touch the @MainActor view model here.
+    private func toggleIslandHidden() {
+        guard let viewModel = windowController?.viewModel else { return }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            if viewModel.isManuallyHidden {
+                viewModel.isManuallyHidden = false
+            } else {
+                viewModel.notchClose()
+                viewModel.isManuallyHidden = true
+            }
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         updateCheckTimer?.invalidate()
         screenObserver = nil
+        hideShortcutMonitor?.stop()
+        hideShortcutMonitor = nil
     }
 
     private func ensureSingleInstance() -> Bool {

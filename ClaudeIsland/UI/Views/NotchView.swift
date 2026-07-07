@@ -24,7 +24,6 @@ struct NotchView: View {
     @State private var previousWaitingForInputIds: Set<String> = []
     @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
     @State private var isVisible: Bool = true
-    @State private var isManuallyHidden: Bool = false
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
 
@@ -185,7 +184,7 @@ struct NotchView: View {
                     }
             }
         }
-        .opacity(isVisible && !isManuallyHidden ? 1 : 0)
+        .opacity(isVisible && !viewModel.isManuallyHidden ? 1 : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .preferredColorScheme(.dark)
         .onAppear {
@@ -354,7 +353,7 @@ struct NotchView: View {
             Button {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     viewModel.notchClose()
-                    isManuallyHidden = true
+                    viewModel.isManuallyHidden = true
                 }
             } label: {
                 Image(systemName: "minus")
@@ -404,7 +403,7 @@ struct NotchView: View {
         if isAnyProcessing || hasPendingPermission {
             activityCoordinator.showActivity(type: .claude)
             // Auto-show when there's activity, even if manually hidden
-            isManuallyHidden = false
+            viewModel.isManuallyHidden = false
         } else {
             activityCoordinator.hideActivity()
         }
@@ -414,7 +413,7 @@ struct NotchView: View {
         switch newStatus {
         case .opened, .popping:
             // Unhide when opened by hover or click
-            isManuallyHidden = false
+            viewModel.isManuallyHidden = false
             // Clear waiting-for-input timestamps only when manually opened (user acknowledged)
             if viewModel.openReason == .click || viewModel.openReason == .hover {
                 waitingForInputTimestamps.removeAll()
