@@ -295,7 +295,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.7.0;
+				MARKETING_VERSION = 1.8.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.abon.ClaudeIsland;
 				PRODUCT_NAME = "AI Island";
 				REGISTER_APP_GROUPS = YES;
@@ -332,7 +332,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.7.0;
+				MARKETING_VERSION = 1.8.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.abon.ClaudeIsland;
 				PRODUCT_NAME = "AI Island";
 				REGISTER_APP_GROUPS = YES;
