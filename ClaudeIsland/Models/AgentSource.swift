@@ -2,18 +2,19 @@
 //  AgentSource.swift
 //  ClaudeIsland
 //
-//  Identifies which agent a session belongs to (Claude Code vs OpenAI Codex)
-//  and, for Codex, which host launched it. Kept intentionally tiny so it can be
-//  used from any isolation context.
+//  Identifies which agent a session belongs to (Claude Code, OpenAI Codex, or
+//  GitHub Copilot CLI) and, for Codex, which host launched it. Kept
+//  intentionally tiny so it can be used from any isolation context.
 //
 
 import Foundation
 
 /// Which agent produced a session. Defaults to `.claude` so existing Claude
 /// code paths (and payloads without a `source` field) are unaffected.
-enum AgentSource: String, Codable, Sendable, Equatable {
+enum AgentSource: String, Codable, Sendable, Equatable, CaseIterable {
     case claude
     case codex
+    case copilot
 
     /// Decode from the optional `source` field on a hook payload.
     /// nil / unknown → `.claude` (preserves legacy behaviour).

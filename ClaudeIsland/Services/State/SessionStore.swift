@@ -39,6 +39,12 @@ actor SessionStore {
     /// liveness check never reaps them — archive them once idle for this long.
     private let codexIdleArchiveSeconds: TimeInterval = 30 * 60
 
+    /// Codex and Copilot have no equivalent of Claude's `Notification`/
+    /// `idle_prompt` hook, so nothing ever routes them from waitingForInput
+    /// back to idle on its own — fall back to a client-side inactivity
+    /// timeout so their mascot doesn't stay stuck in the "happy" pose.
+    private let waitingForInputIdleTimeoutSeconds: TimeInterval = 30
+
     // MARK: - Published State (for UI)
 
     /// Publisher for session state changes (nonisolated for Combine subscription from any context)
@@ -1147,7 +1153,7 @@ actor SessionStore {
 
     /// Recheck status of all active sessions
     private func recheckAllSessions() async {
-        var removedSession = false
+        var stateChanged = false
 
         for (sessionId, session) in Array(sessions) {
             if session.phase == .ended {
@@ -1156,7 +1162,7 @@ actor SessionStore {
                 if session.source == .codex {
                     await CodexConversationParser.shared.resetState(for: sessionId)
                 }
-                removedSession = true
+                stateChanged = true
                 continue
             }
 
@@ -1172,7 +1178,7 @@ actor SessionStore {
                     sessions.removeValue(forKey: sessionId)
                     cancelPendingSync(sessionId: sessionId)
                     await CodexConversationParser.shared.resetState(for: sessionId)
-                    removedSession = true
+                    stateChanged = true
                     continue
                 }
             } else if let pid = session.pid {
@@ -1184,8 +1190,20 @@ actor SessionStore {
                     if session.source == .codex {
                         await CodexConversationParser.shared.resetState(for: sessionId)
                     }
-                    removedSession = true
+                    stateChanged = true
                     continue
+                }
+            }
+
+            // Codex/Copilot: no Notification/idle_prompt hook exists to walk
+            // them back from waitingForInput to idle, so do it ourselves.
+            if session.phase == .waitingForInput, session.source == .codex || session.source == .copilot {
+                let idle = Date().timeIntervalSince(session.lastActivity)
+                if idle > waitingForInputIdleTimeoutSeconds {
+                    var updated = session
+                    updated.phase = .idle
+                    sessions[sessionId] = updated
+                    stateChanged = true
                 }
             }
 
@@ -1201,7 +1219,7 @@ actor SessionStore {
             }
         }
 
-        if removedSession {
+        if stateChanged {
             publishState()
         }
     }

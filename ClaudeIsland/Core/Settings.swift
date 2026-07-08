@@ -40,6 +40,7 @@ enum AppSettings {
         static let notificationSound = "notificationSound"
         static let claudeDirectoryName = "claudeDirectoryName"
         static let enableCodexDetection = "enableCodexDetection"
+        static let enableCopilotDetection = "enableCopilotDetection"
         static let autoApprovalMode = "autoApprovalMode"
         static let autoApproveDenyPatterns = "autoApproveDenyPatterns"
     }
@@ -88,6 +89,22 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue, forKey: Keys.enableCodexDetection)
+        }
+    }
+
+    // MARK: - Copilot Detection
+
+    /// Whether to detect and display GitHub Copilot CLI sessions.
+    /// Defaults to on when a `~/.copilot` directory exists on first launch.
+    static var enableCopilotDetection: Bool {
+        get {
+            if let value = defaults.object(forKey: Keys.enableCopilotDetection) as? Bool {
+                return value
+            }
+            return FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.copilot")
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.enableCopilotDetection)
         }
     }
 

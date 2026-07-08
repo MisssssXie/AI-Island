@@ -22,6 +22,7 @@ struct NotchMenuView: View {
     @State private var launchAtLogin: Bool = false
     @State private var codexDetectionEnabled: Bool = false
     @State private var codexNeedsTrust: Bool = false
+    @State private var copilotDetectionEnabled: Bool = false
     @State private var autoApprovalMode: AutoApprovalMode = .off
 
     var body: some View {
@@ -121,6 +122,27 @@ struct NotchMenuView: View {
                     }
                 }
 
+                MenuToggleRow(
+                    icon: "sparkles",
+                    label: "Copilot Detection",
+                    isOn: copilotDetectionEnabled
+                ) {
+                    if copilotDetectionEnabled {
+                        AppSettings.enableCopilotDetection = false
+                        copilotDetectionEnabled = false
+                        DispatchQueue.global(qos: .utility).async {
+                            CopilotHookInstaller.uninstall()
+                        }
+                    } else {
+                        AppSettings.enableCopilotDetection = true
+                        copilotDetectionEnabled = true
+                        DispatchQueue.global(qos: .utility).async {
+                            CopilotHookInstaller.installIfNeeded()
+                        }
+                    }
+                    Task { await SessionStore.shared.refreshPublish() }
+                }
+
                 AutoApprovalModeRow(mode: autoApprovalMode) { newMode in
                     autoApprovalMode = newMode
                     AppSettings.autoApprovalMode = newMode
@@ -176,6 +198,7 @@ struct NotchMenuView: View {
         hooksInstalled = HookInstaller.isInstalled()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         codexDetectionEnabled = AppSettings.enableCodexDetection
+        copilotDetectionEnabled = AppSettings.enableCopilotDetection
         autoApprovalMode = AppSettings.autoApprovalMode
         screenSelector.refreshScreens()
 

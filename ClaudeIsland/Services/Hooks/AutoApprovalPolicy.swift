@@ -66,7 +66,7 @@ enum AutoApprovalPolicy {
             guard let tool else { return false }
             switch source {
             case .claude: return claudeSafeTools.contains(tool)
-            case .codex: return false
+            case .codex, .copilot: return false
             }
 
         case .all:

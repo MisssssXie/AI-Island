@@ -43,8 +43,9 @@ class ClaudeSessionMonitor: ObservableObject {
                 }
 
                 // The JSONLInterruptWatcher only understands Claude JSONL. Codex
-                // interrupt detection (turn_aborted) is handled by its parser (Phase 2).
-                if event.sessionPhase == .processing && !event.isCodex {
+                // and Copilot interrupt detection is handled by their own parsers
+                // (or not at all yet) — never by this Claude-only watcher.
+                if event.sessionPhase == .processing && event.agentSource == .claude {
                     Task { @MainActor in
                         InterruptWatcherManager.shared.startWatching(
                             sessionId: event.sessionId,

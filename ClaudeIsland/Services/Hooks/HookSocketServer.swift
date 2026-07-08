@@ -467,13 +467,14 @@ class HookSocketServer {
                 toolUseId = eventToolUseId
             } else if let cachedToolUseId = popCachedToolUseId(event: event) {
                 toolUseId = cachedToolUseId
-            } else if event.isCodex {
-                // Codex fires PermissionRequest before (or without) PreToolUse, so
-                // the PreToolUse cache misses. Synthesise an id and keep the socket
-                // open anyway — approval/denial round-trips over the socket and does
-                // not depend on a real tool_use_id (plan §5.3).
-                toolUseId = "codex-perm-\(UUID().uuidString)"
-                logger.debug("Codex permission request - synthesised id \(toolUseId.prefix(20), privacy: .public) for \(event.sessionId.prefix(8), privacy: .public)")
+            } else if event.agentSource != .claude {
+                // Codex/Copilot fire PermissionRequest before (or without)
+                // PreToolUse, so the PreToolUse cache misses. Synthesise an id and
+                // keep the socket open anyway — approval/denial round-trips over
+                // the socket and does not depend on a real tool_use_id (plan §5.3).
+                let prefix = event.agentSource.rawValue
+                toolUseId = "\(prefix)-perm-\(UUID().uuidString)"
+                logger.debug("\(prefix, privacy: .public) permission request - synthesised id \(toolUseId.prefix(20), privacy: .public) for \(event.sessionId.prefix(8), privacy: .public)")
             } else {
                 logger.warning("Permission request missing tool_use_id for \(event.sessionId.prefix(8), privacy: .public) - no cache hit")
                 close(clientSocket)

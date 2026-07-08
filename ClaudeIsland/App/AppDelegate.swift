@@ -53,6 +53,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 CodexHookInstaller.installIfNeeded()
             }
         }
+        let copilotEnabled = AppSettings.enableCopilotDetection
+        AppSettings.enableCopilotDetection = copilotEnabled
+        if copilotEnabled {
+            DispatchQueue.global(qos: .utility).async {
+                CopilotHookInstaller.installIfNeeded()
+            }
+        }
         NSApplication.shared.setActivationPolicy(.accessory)
 
         windowManager = WindowManager()

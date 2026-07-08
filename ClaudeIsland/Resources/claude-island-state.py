@@ -2,12 +2,17 @@
 """
 Claude Island Hook
 - Sends session state to ClaudeIsland.app via Unix socket
-- For PermissionRequest: waits for user decision from the app
+- For PermissionRequest/permissionRequest: waits for user decision from the app
 
-Serves two agents from one script:
+Serves three agents from one script:
 - Claude Code (default, no args) — original behaviour, unchanged.
 - OpenAI Codex (`--source codex`) — same socket protocol, plus a `source`
   marker, the rollout `transcript_path`, and process-tree host detection.
+- GitHub Copilot CLI (`--source copilot`) — camelCase payload fields and no
+  single `hook_event_name` key, so the installer bakes the event name into
+  each hook's command via `--event <name>` instead. Copilot's permission
+  hook also has its own output contract: `{"behavior", "message",
+  "interrupt"}`, distinct from Claude/Codex's `hookSpecificOutput` wrapper.
 """
 import json
 import os
@@ -30,6 +35,19 @@ def _parse_source():
 
 
 SOURCE = _parse_source()
+
+
+def _parse_event():
+    """Read `--event <name>` / `--event=<name>` from argv. Copilot-only: its
+    hook payloads carry no event-name field, so the installer bakes the event
+    name into each hook entry's command instead of us reading it from stdin."""
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == "--event" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--event="):
+            return arg.split("=", 1)[1]
+    return None
 
 
 def get_tty():
@@ -198,13 +216,19 @@ def main():
     except json.JSONDecodeError:
         sys.exit(1)
 
-    session_id = data.get("session_id", "unknown")
-    event = data.get("hook_event_name", "")
-    cwd = data.get("cwd", "")
-    tool_input = data.get("tool_input", {})
+    if SOURCE == "copilot":
+        session_id = data.get("sessionId", "unknown")
+        event = _parse_event() or "unknown"
+        cwd = data.get("cwd", "")
+        tool_input = data.get("toolArgs", {}) or {}
+    else:
+        session_id = data.get("session_id", "unknown")
+        event = data.get("hook_event_name", "")
+        cwd = data.get("cwd", "")
+        tool_input = data.get("tool_input", {})
 
     # Get process info. For Codex, walk the ancestor chain to find the owning
-    # engine pid + host; for Claude keep the original naive getppid() behaviour.
+    # engine pid + host; Claude and Copilot use the direct parent pid.
     tty = get_tty()
     if SOURCE == "codex":
         owner_pid, codex_host = detect_codex_host_and_pid(tty, session_id)
@@ -229,6 +253,8 @@ def main():
             state["transcript_path"] = transcript_path
         if codex_host:
             state["codex_host"] = codex_host
+    elif SOURCE == "copilot":
+        state["source"] = "copilot"
 
     # Map events to status
     if event == "UserPromptSubmit":
@@ -356,6 +382,86 @@ def main():
     elif event == "PostCompact":
         # Compaction finished — return to processing so UI exits .compacting phase
         state["status"] = "processing"
+
+    # --- GitHub Copilot CLI (camelCase event names, distinct from the
+    # PascalCase Claude/Codex names above, so these never collide) ---
+
+    elif event == "sessionStart":
+        state["status"] = "waiting_for_input"
+
+    elif event == "sessionEnd":
+        state["status"] = "ended"
+
+    elif event == "userPromptSubmitted":
+        state["status"] = "processing"
+
+    elif event == "preToolUse":
+        state["status"] = "running_tool"
+        state["tool"] = data.get("toolName")
+        state["tool_input"] = tool_input
+
+    elif event == "postToolUse":
+        state["status"] = "processing"
+        state["tool"] = data.get("toolName")
+        state["tool_input"] = tool_input
+
+    elif event == "postToolUseFailure":
+        state["status"] = "processing"
+        state["tool"] = data.get("toolName")
+        state["tool_input"] = tool_input
+        error = data.get("error") or {}
+        state["tool_error"] = error.get("message") if isinstance(error, dict) else error
+
+    elif event == "agentStop":
+        state["status"] = "waiting_for_input"
+
+    elif event == "preCompact":
+        state["status"] = "compacting"
+
+    elif event == "subagentStart" or event == "subagentStop":
+        state["status"] = "processing"
+
+    elif event == "errorOccurred":
+        state["status"] = "processing"
+        error = data.get("error") or {}
+        state["tool_error"] = error.get("message") if isinstance(error, dict) else error
+
+    elif event == "notification":
+        notification_type = data.get("notification_type") or data.get("notificationType")
+        if notification_type == "idle_prompt":
+            state["status"] = "waiting_for_input"
+        else:
+            state["status"] = "notification"
+        state["notification_type"] = notification_type
+        state["message"] = data.get("message")
+
+    elif event == "permissionRequest":
+        state["status"] = "waiting_for_approval"
+        state["tool"] = data.get("toolName")
+        state["tool_input"] = tool_input
+
+        # Copilot's permission hook has its own output contract — distinct
+        # from Claude/Codex's hookSpecificOutput wrapper.
+        response = send_event(state)
+
+        if response:
+            decision = response.get("decision", "ask")
+            reason = response.get("reason", "")
+
+            if decision == "allow":
+                print(json.dumps({"behavior": "allow"}))
+                sys.exit(0)
+
+            elif decision == "deny":
+                print(json.dumps({
+                    "behavior": "deny",
+                    "message": reason or "Denied by user via ClaudeIsland",
+                    "interrupt": False,
+                }))
+                sys.exit(0)
+
+        # No response or "ask" - let Copilot show its normal UI
+        sys.exit(0)
 
     else:
         state["status"] = "unknown"

@@ -22,7 +22,6 @@ struct NotchView: View {
     @ObservedObject private var updateManager = UpdateManager.shared
     @State private var previousPendingIds: Set<String> = []
     @State private var previousWaitingForInputIds: Set<String> = []
-    @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
     @State private var isVisible: Bool = true
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
@@ -39,19 +38,53 @@ struct NotchView: View {
         sessionMonitor.instances.contains { $0.phase.isWaitingForApproval }
     }
 
-    /// Whether any Claude session is waiting for user input (done/ready state) within the display window
-    private var hasWaitingForInput: Bool {
-        let now = Date()
-        let displayDuration: TimeInterval = 30  // Show checkmark for 30 seconds
+    /// Mascot pose reflecting the most urgent status across all sessions
+    /// (approval > processing > waiting for input > idle).
+    private var aggregatePose: CrabPose {
+        if hasPendingPermission { return .alert }
+        if isAnyProcessing { return .working }
+        if hasWaitingForInput { return .happy }
+        return .idle
+    }
 
-        return sessionMonitor.instances.contains { session in
-            guard session.phase == .waitingForInput else { return false }
-            // Only show if within the 30-second display window
-            if let enteredAt = waitingForInputTimestamps[session.stableId] {
-                return now.timeIntervalSince(enteredAt) < displayDuration
-            }
-            return false
+    /// Whether any Claude session is waiting for user input (done/ready state)
+    /// — mirrors `phase` directly so the notch stays in sync with the real
+    /// session state instead of expiring on its own after a fixed window.
+    private var hasWaitingForInput: Bool {
+        sessionMonitor.instances.contains { $0.phase == .waitingForInput }
+    }
+
+    /// Agent source of whichever session is driving `aggregatePose`, so the
+    /// header mascot shows the right character (same priority order).
+    private var aggregateSource: AgentSource {
+        if let s = sessionMonitor.instances.first(where: { $0.phase.isWaitingForApproval }) {
+            return s.source
         }
+        if let s = sessionMonitor.instances.first(where: { $0.phase == .processing || $0.phase == .compacting }) {
+            return s.source
+        }
+        if let s = sessionMonitor.instances.first(where: { $0.phase == .waitingForInput }) {
+            return s.source
+        }
+        return .claude
+    }
+
+    /// Every agent source with at least one live session, in a stable order —
+    /// the header shows one mascot per source so a Codex session sitting
+    /// alongside a Claude one doesn't get hidden behind the aggregate icon.
+    private var activeSources: [AgentSource] {
+        let present = Set(sessionMonitor.instances.map(\.source))
+        return AgentSource.allCases.filter(present.contains)
+    }
+
+    /// Pose for just one source's sessions (same urgency priority as
+    /// `aggregatePose`, scoped to that source).
+    private func aggregatePose(for source: AgentSource) -> CrabPose {
+        let sessions = sessionMonitor.instances.filter { $0.source == source }
+        if sessions.contains(where: { $0.phase.isWaitingForApproval }) { return .alert }
+        if sessions.contains(where: { $0.phase == .processing || $0.phase == .compacting }) { return .working }
+        if sessions.contains(where: { $0.phase == .waitingForInput }) { return .happy }
+        return .idle
     }
 
     // MARK: - Sizing
@@ -250,8 +283,10 @@ struct NotchView: View {
             // Left side - crab + optional permission indicator (visible when processing, pending, or waiting for input)
             if showClosedActivity {
                 HStack(spacing: 4) {
-                    ClaudeCrabIcon(size: 14, animateLegs: isProcessing)
-                        .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
+                    ForEach(headerMascotSources, id: \.self) { source in
+                        MascotView(source: source, pose: aggregatePose(for: source), size: 24)
+                            .matchedGeometryEffect(id: "crab-\(source.rawValue)", in: activityNamespace, isSource: showClosedActivity)
+                    }
 
                     // Permission indicator only (amber) - waiting for input shows checkmark on right
                     if hasPendingPermission {
@@ -259,8 +294,9 @@ struct NotchView: View {
                             .matchedGeometryEffect(id: "status-indicator", in: activityNamespace, isSource: showClosedActivity)
                     }
                 }
-                .frame(width: viewModel.status == .opened ? nil : sideWidth + (hasPendingPermission ? 18 : 0))
+                .frame(width: viewModel.status == .opened ? nil : mascotRowWidth + (hasPendingPermission ? 18 : 0))
                 .padding(.leading, viewModel.status == .opened ? 8 : 0)
+                .animation(.smooth, value: headerMascotSources)
             }
 
             // Center content
@@ -307,6 +343,44 @@ struct NotchView: View {
         max(0, closedNotchSize.height - 12) + 10
     }
 
+    /// Active sources that are actually busy (not idle) right now — the
+    /// header should only crowd in extra mascots for agents doing something,
+    /// not every source that merely has a session sitting open.
+    private var busySources: [AgentSource] {
+        activeSources.filter { aggregatePose(for: $0) != .idle }
+    }
+
+    /// Same urgency order as `aggregatePose`: alert > working > happy.
+    private func posePriority(_ pose: CrabPose) -> Int {
+        switch pose {
+        case .alert: return 0
+        case .working: return 1
+        case .happy: return 2
+        case .idle: return 3
+        }
+    }
+
+    /// Sources to render as mascots in the header — falls back to a single
+    /// idle Claude crab when nothing is busy, so the pill is never empty.
+    /// Capped at 2 so the pill doesn't keep growing as more agents pile on;
+    /// when there's overflow, the most urgent sources (alert > working >
+    /// happy) win the two slots.
+    private var headerMascotSources: [AgentSource] {
+        guard !busySources.isEmpty else { return [.claude] }
+        return Array(
+            busySources
+                .sorted { posePriority(aggregatePose(for: $0)) < posePriority(aggregatePose(for: $1)) }
+                .prefix(2)
+        )
+    }
+
+    /// Reserved width for the header mascot row: one icon's worth of space
+    /// plus 24pt (20pt icon + 4pt HStack spacing) for each additional
+    /// character beyond the first.
+    private var mascotRowWidth: CGFloat {
+        sideWidth + CGFloat(max(0, headerMascotSources.count - 1)) * 24
+    }
+
     // MARK: - Opened Header Content
 
     @ViewBuilder
@@ -315,7 +389,7 @@ struct NotchView: View {
             // Show static crab only if not showing activity in headerRow
             // (headerRow handles crab + indicator when showClosedActivity is true)
             if !showClosedActivity {
-                ClaudeCrabIcon(size: 14)
+                MascotView(source: aggregateSource, pose: aggregatePose, size: 20)
                     .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: !showClosedActivity)
                     .padding(.leading, 8)
             }
@@ -416,8 +490,6 @@ struct NotchView: View {
             // hidden island - a silent notification-triggered open must not.
             if viewModel.openReason == .click || viewModel.openReason == .hover {
                 viewModel.isManuallyHidden = false
-                // Clear waiting-for-input timestamps only when manually opened (user acknowledged)
-                waitingForInputTimestamps.removeAll()
             }
         case .closed:
             break
@@ -444,18 +516,6 @@ struct NotchView: View {
         let currentIds = Set(waitingForInputSessions.map { $0.stableId })
         let newWaitingIds = currentIds.subtracting(previousWaitingForInputIds)
 
-        // Track timestamps for newly waiting sessions
-        let now = Date()
-        for session in waitingForInputSessions where newWaitingIds.contains(session.stableId) {
-            waitingForInputTimestamps[session.stableId] = now
-        }
-
-        // Clean up timestamps for sessions no longer waiting
-        let staleIds = Set(waitingForInputTimestamps.keys).subtracting(currentIds)
-        for staleId in staleIds {
-            waitingForInputTimestamps.removeValue(forKey: staleId)
-        }
-
         // Bounce the notch when a session newly enters waitingForInput state
         if !newWaitingIds.isEmpty {
             // Get the sessions that just entered waitingForInput
@@ -481,12 +541,6 @@ struct NotchView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     isBouncing = false
                 }
-            }
-
-            // Schedule hiding the checkmark after 30 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [self] in
-                // Trigger a UI update to re-evaluate hasWaitingForInput
-                handleProcessingChange()
             }
         }
 
