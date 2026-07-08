@@ -289,7 +289,7 @@ struct HideShortcutRow: View {
 
             Spacer()
 
-            Text("⌃⌥X ×2")
+            Text("Ctrl+Option+X")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white.opacity(0.4))
         }
