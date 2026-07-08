@@ -43,7 +43,7 @@ actor SessionStore {
     /// `idle_prompt` hook, so nothing ever routes them from waitingForInput
     /// back to idle on its own — fall back to a client-side inactivity
     /// timeout so their mascot doesn't stay stuck in the "happy" pose.
-    private let waitingForInputIdleTimeoutSeconds: TimeInterval = 30
+    private let waitingForInputIdleTimeoutSeconds: TimeInterval = 1 * 60
 
     // MARK: - Published State (for UI)
 
