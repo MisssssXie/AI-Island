@@ -80,9 +80,82 @@ echo "Appcast 產生於: $APPCAST_DIR/appcast.xml"
 echo ""
 
 # ============================================
-# Step 2: Create GitHub Release
+# Step 2: Prepare Release Notes
 # ============================================
-echo "=== Step 2: Creating GitHub Release ==="
+echo "=== Step 2: Preparing Release Notes ==="
+
+NOTES_DIR="$PROJECT_DIR/releases/notes"
+mkdir -p "$NOTES_DIR"
+NOTES_FILE="$NOTES_DIR/v$VERSION.md"
+
+if [ ! -f "$NOTES_FILE" ]; then
+    echo "找不到 $NOTES_FILE，從 git commit 產生 changelog 草稿..."
+    # 找上一個版本 tag（排除本次版本），作為 changelog 比較起點
+    PREV_TAG=$(git -C "$PROJECT_DIR" tag --sort=-v:refname | grep -v "^v$VERSION$" | head -1)
+    if [ -n "$PREV_TAG" ]; then
+        RANGE="$PREV_TAG..HEAD"
+        echo "  比較範圍: $RANGE"
+    else
+        RANGE="HEAD"
+        echo "  找不到前一個 tag，使用全部 commit"
+    fi
+    # 只取 feat / fix，去掉 conventional commit 前綴，轉成 markdown bullet
+    git -C "$PROJECT_DIR" log --pretty=format:'%s' "$RANGE" \
+        | grep -E '^(feat|fix)(\(.+\))?:' \
+        | sed -E 's/^(feat|fix)(\(.+\))?:[[:space:]]*/- /' \
+        > "$NOTES_FILE" || true
+    if [ ! -s "$NOTES_FILE" ]; then
+        echo "- " > "$NOTES_FILE"
+    fi
+    echo ""
+    echo "已產生草稿："
+    echo "----------------------------------------"
+    cat "$NOTES_FILE"
+    echo "----------------------------------------"
+    echo ""
+    if [ -n "${EDITOR:-}" ]; then
+        "$EDITOR" "$NOTES_FILE"
+    else
+        echo "請編輯 $NOTES_FILE（潤飾 changelog），完成後回來按 Enter 繼續，或 Ctrl+C 中止。"
+        read -r _ || true
+    fi
+else
+    echo "使用現有 changelog: $NOTES_FILE"
+fi
+
+# 組出完整的 release notes：標題 + Changelog（讀檔）+ 固定的 Installation / Auto-updates
+NOTES_BODY="$(mktemp)"
+{
+    echo "## $APP_NAME v$VERSION"
+    echo ""
+    echo "### Changelog"
+    cat "$NOTES_FILE"
+    echo ""
+    cat <<'STATIC_NOTES'
+### Installation
+1. 下載 `.dmg` 檔案
+2. 打開 DMG，將 **AI Island** 拖到 **Applications** 資料夾
+3. 再去雙擊 App 打開 AI Island，此時**首次打開會出現警告 ⚠️，先不要丟垃圾桶！** 因為此版本沒有 Apple Developer 簽名
+4. 請依照以下方式解除：
+   - 方式 A：到 **系統設定 → 隱私權與安全性**，往下滑找到「已阻擋 AI Island」，點擊 **強制打開**
+   - 方式 B：打開終端機，輸入以下指令後即可正常打開：
+     ```bash
+     xattr -cr /Applications/AI\ Island.app
+     ```
+5. 開啟**輔助使用權限**（視窗切換功能需要）：系統設定 → 隱私權與安全性 → 輔助使用 → 加入 AI Island 並開啟
+
+### Auto-updates
+After installation, AI Island will automatically check for updates.
+STATIC_NOTES
+} > "$NOTES_BODY"
+
+echo "Release notes 已準備完成。"
+echo ""
+
+# ============================================
+# Step 3: Create GitHub Release
+# ============================================
+echo "=== Step 3: Creating GitHub Release ==="
 
 if ! command -v gh &> /dev/null; then
     echo "ERROR: 找不到 gh CLI，請先安裝：brew install gh"
@@ -90,24 +163,21 @@ if ! command -v gh &> /dev/null; then
 fi
 
 if gh release view "v$VERSION" --repo "$GITHUB_REPO" &>/dev/null; then
-    echo "Release v$VERSION 已存在，更新中..."
+    echo "Release v$VERSION 已存在，更新 DMG 與 release notes..."
     gh release upload "v$VERSION" "$DMG_PATH" --repo "$GITHUB_REPO" --clobber
+    gh release edit "v$VERSION" \
+        --repo "$GITHUB_REPO" \
+        --title "$APP_NAME v$VERSION" \
+        --notes-file "$NOTES_BODY"
 else
     echo "建立 release v$VERSION..."
     gh release create "v$VERSION" "$DMG_PATH" \
         --repo "$GITHUB_REPO" \
         --title "$APP_NAME v$VERSION" \
-        --notes "## $APP_NAME v$VERSION
-
-### Installation
-1. Download \`$APP_NAME-$VERSION.dmg\`
-2. Open the DMG and drag $APP_NAME to Applications
-3. Launch $APP_NAME from Applications
-4. 因未經 Apple 公證，第一次開啟請「右鍵 → 打開」，或到「系統設定 → 隱私權與安全性」點「仍要打開」
-
-### Auto-updates
-After installation, $APP_NAME will automatically check for updates."
+        --notes-file "$NOTES_BODY"
 fi
+
+rm -f "$NOTES_BODY"
 
 # GitHub 上傳時檔名裡的空白會變成句點，直接向 GitHub 查詢實際網址，不要自己猜檔名
 GITHUB_DOWNLOAD_URL=$(gh release view "v$VERSION" --repo "$GITHUB_REPO" --json assets --jq '.assets[] | select(.name | endswith(".dmg")) | .url')
@@ -116,9 +186,9 @@ echo "Download URL: $GITHUB_DOWNLOAD_URL"
 echo ""
 
 # ============================================
-# Step 3: Publish appcast.xml to GitHub (raw file)
+# Step 4: Publish appcast.xml to GitHub (raw file)
 # ============================================
-echo "=== Step 3: Publishing Appcast ==="
+echo "=== Step 4: Publishing Appcast ==="
 
 cp "$APPCAST_DIR/appcast.xml" "$APPCAST_ROOT"
 
