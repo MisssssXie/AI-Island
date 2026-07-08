@@ -20,7 +20,7 @@ final class HideShortcutMonitor {
     /// Max time allowed between consecutive presses to still count as a streak.
     private let maxGap: TimeInterval = 0.6
     /// Number of presses required to trigger the toggle.
-    private let requiredCount = 2
+    private let requiredCount = 1
     /// Virtual key code of the hot key. kVK_ANSI_X ("x").
     private let hotKeyCode = UInt32(kVK_ANSI_X)
     /// Modifier(s) that must be held. `controlKey | optionKey` == ⌃⌥.

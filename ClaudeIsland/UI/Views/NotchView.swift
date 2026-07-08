@@ -402,8 +402,8 @@ struct NotchView: View {
     private func handleProcessingChange() {
         if isAnyProcessing || hasPendingPermission {
             activityCoordinator.showActivity(type: .claude)
-            // Auto-show when there's activity, even if manually hidden
-            viewModel.isManuallyHidden = false
+            // Manual hide stays in effect through activity changes - only
+            // explicit user action (shortcut, hover, click) should reveal it.
         } else {
             activityCoordinator.hideActivity()
         }
@@ -412,10 +412,11 @@ struct NotchView: View {
     private func handleStatusChange(from oldStatus: NotchStatus, to newStatus: NotchStatus) {
         switch newStatus {
         case .opened, .popping:
-            // Unhide when opened by hover or click
-            viewModel.isManuallyHidden = false
-            // Clear waiting-for-input timestamps only when manually opened (user acknowledged)
+            // Only hover/click are explicit user intent to reveal a manually
+            // hidden island - a silent notification-triggered open must not.
             if viewModel.openReason == .click || viewModel.openReason == .hover {
+                viewModel.isManuallyHidden = false
+                // Clear waiting-for-input timestamps only when manually opened (user acknowledged)
                 waitingForInputTimestamps.removeAll()
             }
         case .closed:
@@ -429,6 +430,7 @@ struct NotchView: View {
 
         if !newPendingIds.isEmpty &&
            viewModel.status == .closed &&
+           !viewModel.isManuallyHidden &&
            !TerminalVisibilityDetector.isTerminalVisibleOnCurrentSpace() {
             viewModel.notchOpen(reason: .notification)
         }
