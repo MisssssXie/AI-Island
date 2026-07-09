@@ -223,9 +223,6 @@ struct NotchView: View {
         .onAppear {
             sessionMonitor.startMonitoring()
         }
-        .onChange(of: viewModel.status) { oldStatus, newStatus in
-            handleStatusChange(from: oldStatus, to: newStatus)
-        }
         .onChange(of: sessionMonitor.pendingInstances) { _, sessions in
             handlePendingSessionsChange(sessions)
         }
@@ -480,19 +477,6 @@ struct NotchView: View {
             // explicit user action (shortcut, hover, click) should reveal it.
         } else {
             activityCoordinator.hideActivity()
-        }
-    }
-
-    private func handleStatusChange(from oldStatus: NotchStatus, to newStatus: NotchStatus) {
-        switch newStatus {
-        case .opened, .popping:
-            // Only hover/click are explicit user intent to reveal a manually
-            // hidden island - a silent notification-triggered open must not.
-            if viewModel.openReason == .click || viewModel.openReason == .hover {
-                viewModel.isManuallyHidden = false
-            }
-        case .closed:
-            break
         }
     }
 

@@ -254,6 +254,14 @@ class NotchViewModel: ObservableObject {
     // MARK: - Actions
 
     func notchOpen(reason: NotchOpenReason = .unknown) {
+        // Once the island is manually hidden (Ctrl+Option+X shortcut / minimize
+        // button), hovering or clicking the invisible notch region must NOT
+        // reveal it again — only pressing the shortcut (which flips
+        // `isManuallyHidden` back off directly) may bring it back.
+        if isManuallyHidden && (reason == .hover || reason == .click) {
+            return
+        }
+
         openReason = reason
         status = .opened
 
