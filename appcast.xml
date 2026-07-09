@@ -3,13 +3,22 @@
     <channel>
         <title>AI Island</title>
         <item>
+            <title>1.9.0</title>
+            <pubDate>Thu, 09 Jul 2026 17:01:46 +0800</pubDate>
+            <sparkle:version>2026070901</sparkle:version>
+            <sparkle:shortVersionString>1.9.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.9.0/AI.Island-1.9.0.dmg" length="3844870" type="application/octet-stream" sparkle:edSignature="SvRyI6EKCjLNPZtxX+mdgKTplJ4Rx4zkjOgiNARYDwZfh7tutFoszOW9u6O3vCXMYVM3Jj+RV9pChwe3RuOTCA=="/>
+        </item>
+        <item>
             <title>1.8.0</title>
             <pubDate>Wed, 08 Jul 2026 15:59:01 +0800</pubDate>
             <sparkle:version>2026070802</sparkle:version>
             <sparkle:shortVersionString>1.8.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.8.0/AI.Island-1.8.0.dmg" length="3840034" type="application/octet-stream" sparkle:edSignature="ZWR2Le3VhGCS9heHCVrdI4LkRIRHJ/KcNbauSxktPYfF8iTwC/sStOqTDe88w+U4gE/SC/ThUWk9kGOn+CqbBA=="/>
+            <enclosure url="https://raw.githubusercontent.com/MisssssXie/AI-Island/main/AI%20Island-1.8.0.dmg" length="3840034" type="application/octet-stream" sparkle:edSignature="ZWR2Le3VhGCS9heHCVrdI4LkRIRHJ/KcNbauSxktPYfF8iTwC/sStOqTDe88w+U4gE/SC/ThUWk9kGOn+CqbBA=="/>
         </item>
         <item>
             <title>1.7.0</title>
@@ -19,18 +28,6 @@
             <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://raw.githubusercontent.com/MisssssXie/AI-Island/main/AI%20Island-1.7.0.dmg" length="3800262" type="application/octet-stream" sparkle:edSignature="BKBHfPPVRMI9VWw4rDZteBUs87VNGZIZoOvqQ1/n/KH/FOerMral9jdO3souAZlkvQbrhjRUoIlfrnVIq2m4Ag=="/>
-        </item>
-        <item>
-            <title>1.6.0</title>
-            <pubDate>Tue, 07 Jul 2026 16:52:00 +0800</pubDate>
-            <sparkle:version>2026070704</sparkle:version>
-            <sparkle:shortVersionString>1.6.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://raw.githubusercontent.com/MisssssXie/AI-Island/main/AI%20Island-1.6.0.dmg" length="3800394" type="application/octet-stream" sparkle:edSignature="IC/nTmSA/cxjyYOP78Apg7oBmujKeX/zok5RniM0rg3k1MgaIJyR0p5/VmtQi2YiaiExcKmU3Oatqx2E3JnaBA=="/>
-            <sparkle:deltas>
-                <enclosure url="https://raw.githubusercontent.com/MisssssXie/AI-Island/main/AI%20Island2026070704-20260707.delta" sparkle:deltaFrom="20260707" length="254286" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977616" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="PT0kYdJL5oOFpeLF5gbC5tfqa/OBpF94POl2NE9OmiXgMY0IVlOP3Fs1clkFD/gf7Bz7RWPsmubmRP+txfCCDw=="/>
-            </sparkle:deltas>
         </item>
     </channel>
 </rss>
