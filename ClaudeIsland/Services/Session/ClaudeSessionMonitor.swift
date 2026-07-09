@@ -17,7 +17,20 @@ class ClaudeSessionMonitor: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
 
+    /// Hook events must reach `SessionStore` in the exact order the socket
+    /// delivered them. Wrapping each in its own `Task { await process(…) }`
+    /// let them enter the actor out of order: e.g. a `PostToolUse` applied
+    /// *after* its trailing `Stop` flips the session waitingForInput →
+    /// processing (a legal transition) and strands it there — the "working"
+    /// mascot that never stops. Funnel every event through one FIFO stream
+    /// drained by a single consumer so ordering is preserved end-to-end.
+    private let eventContinuation: AsyncStream<SessionEvent>.Continuation
+    private var eventConsumer: Task<Void, Never>?
+
     init() {
+        let (stream, continuation) = AsyncStream<SessionEvent>.makeStream()
+        self.eventContinuation = continuation
+
         SessionStore.shared.sessionsPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in
@@ -26,6 +39,20 @@ class ClaudeSessionMonitor: ObservableObject {
             .store(in: &cancellables)
 
         InterruptWatcherManager.shared.delegate = self
+
+        // Single consumer: awaits each event to completion before the next,
+        // so events are applied strictly in arrival order (no actor-reentrancy
+        // interleaving between them).
+        eventConsumer = Task {
+            for await event in stream {
+                await SessionStore.shared.process(event)
+            }
+        }
+    }
+
+    deinit {
+        eventContinuation.finish()
+        eventConsumer?.cancel()
     }
 
     // MARK: - Monitoring Lifecycle
@@ -37,10 +64,10 @@ class ClaudeSessionMonitor: ObservableObject {
         }
 
         HookSocketServer.shared.start(
-            onEvent: { event in
-                Task {
-                    await SessionStore.shared.process(.hookReceived(event))
-                }
+            onEvent: { [eventContinuation] event in
+                // Preserve arrival order (see eventContinuation docs): yield to
+                // the FIFO stream instead of spawning an unordered Task.
+                eventContinuation.yield(.hookReceived(event))
 
                 // The JSONLInterruptWatcher only understands Claude JSONL. Codex
                 // and Copilot interrupt detection is handled by their own parsers
