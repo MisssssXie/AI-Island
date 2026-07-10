@@ -141,18 +141,27 @@ actor SessionStore {
         let sessionId = event.sessionId
 
         // Codex 桌面版（app-server，現內建於 ChatGPT.app）每回合會替背景 helper
-        // thread（產生標題等）各發一次 hook：session_id 全新、沒有 rollout 檔、
-        // cwd 是 app-server 的 "/"。若照單全收，每問一句就多出數列永不回收的
-        // 幽靈 session。因此對「未知的 Codex session」設閘門：
+        // thread（產生標題、摘要等）各發一次 hook：session_id 全新、rollout 完全
+        // 不落地。若照單全收，每問一句、每次「編輯後重送」就多出數列永不回收的
+        // 幽靈 session。
+        //
+        // 唯一可靠的判別依據是「這個 session 是否有 rollout 檔」——真正的 user
+        // thread 一定有（sessions/… 或 archived_sessions/…，且 session_meta 在
+        // 第一則使用者訊息之前就寫入磁碟，因此 UserPromptSubmit hook 抵達時檔案
+        // 必已存在）；helper thread 永遠沒有。**不能**再用 cwd 判斷：編輯後重送
+        // 的 helper thread 會繼承專案 cwd（不是 "/"），因此舊的 cwd 閘門會漏。
+        // 對「未知的 Codex session」設閘門：
         //  1. 純生命週期事件（SessionStart／Stop）不建列 — 真正的回合一定會再
         //     送出 UserPromptSubmit 或工具事件，屆時再建。
-        //  2. cwd 為 "/" 或空字串的事件不建列 — 真實 session 一定帶專案路徑。
+        //  2. transcript_path 不存在於磁碟的事件不建列（= 沒有 rollout 的幽靈）。
         //     但等待回應的 PermissionRequest 例外：使用者必須看得到才能決定。
-        if sessions[sessionId] == nil, event.agentSource == .codex {
+        if sessions[sessionId] == nil, event.agentSource == .codex, !event.expectsResponse {
             let isLifecycleOnly = event.event == "SessionStart" || event.event == "Stop"
-            let hasRealCwd = !event.cwd.isEmpty && event.cwd != "/"
-            if isLifecycleOnly || (!hasRealCwd && !event.expectsResponse) {
-                Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (cwd: \(event.cwd, privacy: .public)) — not materializing")
+            let hasRollout = event.transcriptPath.map {
+                !$0.isEmpty && FileManager.default.fileExists(atPath: $0)
+            } ?? false
+            if isLifecycleOnly || !hasRollout {
+                Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (cwd: \(event.cwd, privacy: .public), hasRollout: \(hasRollout, privacy: .public)) — not materializing")
                 return
             }
         }
