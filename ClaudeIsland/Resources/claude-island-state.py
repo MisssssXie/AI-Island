@@ -120,6 +120,8 @@ def _walk_for_codex(tty):
     process and classify its host. Returns (pid, host).
 
     - Codex.app/Contents in an ancestor command -> desktop (long-lived engine)
+    - ChatGPT.app/Contents + codex -> desktop (Codex 0.144+ ships inside
+      ChatGPT.app as `.../Resources/codex ... app-server`)
     - .vscode + codex -> vscode
     - a `codex` binary ancestor -> cli (has tty) or exec (no tty)
     Falls back to the direct parent when nothing matches (old/unknown codex)."""
@@ -137,6 +139,8 @@ def _walk_for_codex(tty):
         ppid, cmd = entry
         lowered = cmd.lower()
         if "codex.app/contents" in lowered:
+            return cur, "desktop"
+        if "chatgpt.app/contents" in lowered and "codex" in lowered:
             return cur, "desktop"
         if ".vscode" in lowered and "codex" in lowered:
             return cur, "vscode"

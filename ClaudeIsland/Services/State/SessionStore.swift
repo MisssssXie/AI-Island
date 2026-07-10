@@ -139,6 +139,24 @@ actor SessionStore {
 
     private func processHookEvent(_ event: HookEvent) async {
         let sessionId = event.sessionId
+
+        // Codex 桌面版（app-server，現內建於 ChatGPT.app）每回合會替背景 helper
+        // thread（產生標題等）各發一次 hook：session_id 全新、沒有 rollout 檔、
+        // cwd 是 app-server 的 "/"。若照單全收，每問一句就多出數列永不回收的
+        // 幽靈 session。因此對「未知的 Codex session」設閘門：
+        //  1. 純生命週期事件（SessionStart／Stop）不建列 — 真正的回合一定會再
+        //     送出 UserPromptSubmit 或工具事件，屆時再建。
+        //  2. cwd 為 "/" 或空字串的事件不建列 — 真實 session 一定帶專案路徑。
+        //     但等待回應的 PermissionRequest 例外：使用者必須看得到才能決定。
+        if sessions[sessionId] == nil, event.agentSource == .codex {
+            let isLifecycleOnly = event.event == "SessionStart" || event.event == "Stop"
+            let hasRealCwd = !event.cwd.isEmpty && event.cwd != "/"
+            if isLifecycleOnly || (!hasRealCwd && !event.expectsResponse) {
+                Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (cwd: \(event.cwd, privacy: .public)) — not materializing")
+                return
+            }
+        }
+
         var session = sessions[sessionId] ?? createSession(from: event)
 
         session.pid = event.pid
