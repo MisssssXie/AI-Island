@@ -127,8 +127,10 @@ struct ToolCompletionResult: Sendable {
 // MARK: - Hook Event Extensions
 
 extension HookEvent {
-    /// Determine the target session phase based on this hook event
-    nonisolated func determinePhase() -> SessionPhase {
+    /// 根據此 hook 事件判斷目標工作階段狀態。
+    /// 若事件未包含狀態資訊（例如資訊型通知或未知狀態）則回傳 nil，
+    /// 讓工作階段維持目前狀態，避免在回合進行途中被切換成 .idle。
+    nonisolated func determinePhase() -> SessionPhase? {
         // PreCompact takes priority
         if event == "PreCompact" {
             return .compacting
@@ -159,7 +161,9 @@ extension HookEvent {
         case "ended":
             return .ended
         default:
-            return .idle
+            // "notification"（elicitation_dialog、agent_needs_input、auth_success…）
+            // 與 "unknown" 都不包含工作階段生命週期資訊。
+            return nil
         }
     }
 

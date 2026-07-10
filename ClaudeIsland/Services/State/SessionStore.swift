@@ -39,11 +39,18 @@ actor SessionStore {
     /// liveness check never reaps them — archive them once idle for this long.
     private let codexIdleArchiveSeconds: TimeInterval = 30 * 60
 
-    /// Codex and Copilot have no equivalent of Claude's `Notification`/
-    /// `idle_prompt` hook, so nothing ever routes them from waitingForInput
-    /// back to idle on its own — fall back to a client-side inactivity
-    /// timeout so their mascot doesn't stay stuck in the "happy" pose.
+    /// 用戶端將 waitingForInput → idle 的閒置逾時。Codex 與 Copilot 完全沒有
+    /// 對應 Claude `Notification`／`idle_prompt` 的 hook，而 Claude 也只會在特定條件下
+    /// （例如終端機失去焦點）觸發 idle_prompt，因此所有來源都需要此備援機制，
+    /// 否則吉祥物可能會永遠停留在「開心」姿勢。
     private let waitingForInputIdleTimeoutSeconds: TimeInterval = 1 * 60
+
+    /// 針對卡在 processing／compacting 的工作階段所設的自我修復逾時：hook 會平行執行，
+    /// 無法保證傳送順序或一定送達，而按 Esc 中斷也不會觸發 Stop hook，
+    /// 因此結束事件可能永遠不會抵達。若超過此時間未收到任何事件，且已知沒有工具執行中
+    /// （長時間執行的 Bash／Task 會在 PreToolUse 至 PostToolUse 期間保留 inProgress 項目），
+    /// 則將狀態降級為 waitingForInput。
+    private let processingStaleTimeoutSeconds: TimeInterval = 5 * 60
 
     // MARK: - Published State (for UI)
 
@@ -176,12 +183,27 @@ actor SessionStore {
             Self.logger.info("auto-approved \(event.tool ?? "?", privacy: .public) for \(sessionId.prefix(8), privacy: .public)")
         }
 
-        let newPhase: SessionPhase = autoApprove ? .processing : event.determinePhase()
+        let newPhase: SessionPhase? = autoApprove ? .processing : event.determinePhase()
 
-        if session.phase.canTransition(to: newPhase) {
-            session.phase = newPhase
-        } else {
-            Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: newPhase), privacy: .public), ignoring")
+        // 處於休息狀態的工作階段（Stop 後的 waitingForInput，或中斷／idle_prompt 後的 idle）
+        // 不應被「延遲抵達」的事件拉回 processing。PostToolUse、PostToolUseFailure、
+        // PermissionDenied、SubagentStart、SubagentStop 與 PostCompact 都會回報
+        // "processing"，但它們不可能是新回合的第一個事件；真正的新回合會透過
+        // UserPromptSubmit 或 PreToolUse 宣告開始。hook 會以不同處理程序平行執行並競相連線
+        // 至 socket，因此這些事件即使在邏輯上較早發生，仍可能晚於該回合的 Stop 抵達，
+        // 或在中斷監看器已將工作階段設為 idle 後才抵達，導致吉祥物被切回「工作中」並卡住。
+        // 遇到這種情況時應忽略狀態變更。
+        let cannotStartTurn = ["PostToolUse", "PostToolUseFailure", "PermissionDenied",
+                               "SubagentStart", "SubagentStop", "PostCompact"].contains(event.event)
+        let isResting = session.phase == .waitingForInput || session.phase == .idle
+        if let newPhase {
+            if isResting, newPhase == .processing, cannotStartTurn {
+                Self.logger.debug("Ignoring trailing \(event.event, privacy: .public) that would revive resting session \(sessionId.prefix(8), privacy: .public)")
+            } else if session.phase.canTransition(to: newPhase) {
+                session.phase = newPhase
+            } else {
+                Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: newPhase), privacy: .public), ignoring")
+            }
         }
 
         // Claude drives its chat items (tool placeholders, subagents) from hook
@@ -270,6 +292,13 @@ actor SessionStore {
                     session.chatItems.append(placeholderItem)
                     Self.logger.debug("Created placeholder tool entry for \(toolUseId.prefix(16), privacy: .public)")
                 }
+            }
+
+        case "PostToolUseFailure", "PermissionDenied":
+            // 無論是哪一種情況，工具都已結束；移除 inProgress 項目，避免卡住 processing
+            // 的監看機制永遠受到阻擋。結果／狀態會透過 JSONL（toolCompleted）進行協調。
+            if let toolUseId = event.toolUseId {
+                session.toolTracker.completeTool(id: toolUseId, success: false)
             }
 
         case "PostToolUse":
@@ -455,6 +484,10 @@ actor SessionStore {
     /// This is the authoritative handler for tool completions - ensures consistent state updates
     private func processToolCompleted(sessionId: String, toolUseId: String, result: ToolCompletionResult) async {
         guard var session = sessions[sessionId] else { return }
+
+        // JSONL 是具權威性的完成訊號；即使 PostToolUse hook 在平行競爭中遺失，
+        // 仍應清除 inProgress 項目。
+        session.toolTracker.completeTool(id: toolUseId, success: result.status == .success)
 
         // Check if this tool is already completed (avoid duplicate processing)
         if let existingItem = session.chatItems.first(where: { $0.id == toolUseId }),
@@ -910,6 +943,10 @@ actor SessionStore {
         // Clear subagent state
         session.subagentState = SubagentState()
 
+        // 遭中斷的工具不會收到 PostToolUse；移除其 inProgress 項目，
+        // 避免卡住 processing 的監看機制被殘留項目阻擋。
+        session.toolTracker.inProgress.removeAll()
+
         // Mark running tools as interrupted
         for i in 0..<session.chatItems.count {
             if case .toolCall(var tool) = session.chatItems[i].type,
@@ -1195,13 +1232,31 @@ actor SessionStore {
                 }
             }
 
-            // Codex/Copilot: no Notification/idle_prompt hook exists to walk
-            // them back from waitingForInput to idle, so do it ourselves.
-            if session.phase == .waitingForInput, session.source == .codex || session.source == .copilot {
+            // 所有來源的 waitingForInput → idle 備援機制：Codex／Copilot 完全沒有
+            // idle_prompt hook，而 Claude 也只會在特定條件下觸發；若無此機制，
+            // 「開心」姿勢將永遠不會回到休息狀態。
+            if session.phase == .waitingForInput {
                 let idle = Date().timeIntervalSince(session.lastActivity)
                 if idle > waitingForInputIdleTimeoutSeconds {
                     var updated = session
                     updated.phase = .idle
+                    sessions[sessionId] = updated
+                    stateChanged = true
+                }
+            }
+
+            // 自動修復卡住的 processing／compacting：結束事件（Stop／PostCompact）可能完全遺失，
+            // 因為 hook 是無法保證送達的平行處理程序，而按 Esc 中斷也完全不會觸發 Stop。
+            // 僅在已知沒有工具執行中時才降級，避免提前中止長時間執行的 Bash／Task
+            // （已收到 PreToolUse，但仍在等待 PostToolUse）。
+            if session.phase.isActive,
+               session.toolTracker.inProgress.isEmpty,
+               Date().timeIntervalSince(session.lastActivity) > processingStaleTimeoutSeconds {
+                Self.logger.info("Session \(sessionId.prefix(8), privacy: .public) stuck in \(String(describing: session.phase), privacy: .public) for >\(Int(self.processingStaleTimeoutSeconds))s with no running tool — demoting to waitingForInput")
+                var updated = session
+                if updated.phase.canTransition(to: .waitingForInput) {
+                    updated.phase = .waitingForInput
+                    updated.lastActivity = Date()
                     sessions[sessionId] = updated
                     stateChanged = true
                 }

@@ -107,6 +107,9 @@ enum SessionPhase: Sendable {
             return true  // Direct permission request on idle session
         case (.idle, .compacting):
             return true
+        case (.idle, .waitingForInput):
+            return true  // SessionStart 會將新建立（初始為 .idle）的工作階段回報為
+                         // waiting_for_input，表示該工作階段確實已可接收輸入
 
         // Processing transitions
         case (.processing, .waitingForInput):

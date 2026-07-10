@@ -214,13 +214,23 @@ def main():
     try:
         data = json.load(sys.stdin)
     except json.JSONDecodeError:
-        sys.exit(1)
+        # 絕不以非零狀態碼結束：Copilot 的 preToolUse hook 遇到非零狀態碼時會採取封閉式失敗，
+        # 並以「hook errored」拒絕工具呼叫，因此格式錯誤的酬載不應阻擋代理程式。
+        sys.exit(0)
 
     if SOURCE == "copilot":
         session_id = data.get("sessionId", "unknown")
         event = _parse_event() or "unknown"
         cwd = data.get("cwd", "")
         tool_input = data.get("toolArgs", {}) or {}
+        # 文件中 toolArgs 的型別為 `unknown`，實際上也曾收到經 JSON 編碼的「字串」；
+        # 必須先解碼，否則 Swift 端會因 tool_input 必須是物件而無法解析整個事件。
+        if isinstance(tool_input, str):
+            try:
+                decoded = json.loads(tool_input)
+                tool_input = decoded if isinstance(decoded, dict) else {"raw": tool_input}
+            except (json.JSONDecodeError, ValueError):
+                tool_input = {"raw": tool_input}
     else:
         session_id = data.get("session_id", "unknown")
         event = data.get("hook_event_name", "")
@@ -471,4 +481,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # 一律採取開放式失敗：preToolUse hook 以非零狀態碼結束時，Copilot 會直接拒絕工具呼叫。
+        # （main() 內的 sys.exit() 會引發 SystemExit，此處不會捕捉該例外。）
+        sys.exit(0)
