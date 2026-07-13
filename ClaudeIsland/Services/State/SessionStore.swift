@@ -35,9 +35,10 @@ actor SessionStore {
     /// Status check interval (3 seconds)
     private let statusCheckIntervalSeconds: UInt64 = 3
 
-    /// Codex desktop/vscode sessions share a long-lived engine pid, so the pid
-    /// liveness check never reaps them — archive them once idle for this long.
-    private let codexIdleArchiveSeconds: TimeInterval = 30 * 60
+    /// Archive sessions that have remained in a safe resting phase for this
+    /// long. CLI processes can stay alive indefinitely while waiting at their
+    /// prompt, so pid liveness alone is not enough to remove stale sessions.
+    private let idleArchiveSeconds: TimeInterval = 30 * 60
 
     /// 用戶端將 waitingForInput → idle 的閒置逾時。Codex 與 Copilot 完全沒有
     /// 對應 Claude `Notification`／`idle_prompt` 的 hook，而 Claude 也只會在特定條件下
@@ -1290,22 +1291,28 @@ actor SessionStore {
                 continue
             }
 
-            // Codex desktop/vscode: long-lived engine pid — reap on idle timeout
-            // instead of pid liveness (which would keep them forever).
+            // A CLI process may remain alive indefinitely at its prompt, while
+            // Codex desktop/vscode use a long-lived shared engine. In both cases
+            // pid liveness alone would leave stale sessions on the island, so
+            // archive every source after 30 minutes in a safe resting phase.
+            let idle = Date().timeIntervalSince(session.lastActivity)
+            let archivable = session.phase == .idle || session.phase == .waitingForInput
+            if archivable && idle > idleArchiveSeconds {
+                Self.logger.info("Archiving idle \(session.source.rawValue, privacy: .public) session \(sessionId.prefix(8), privacy: .public)")
+                sessions.removeValue(forKey: sessionId)
+                cancelPendingSync(sessionId: sessionId)
+                if session.source == .codex {
+                    await CodexConversationParser.shared.resetState(for: sessionId)
+                }
+                stateChanged = true
+                continue
+            }
+
+            // Codex desktop/vscode share a long-lived engine pid, so their pid
+            // is not a useful signal for the lifetime of an individual session.
             let isPersistentCodex = session.source == .codex
                 && (session.codexHost.map { !$0.hasEphemeralProcess } ?? false)
-            if isPersistentCodex {
-                let idle = Date().timeIntervalSince(session.lastActivity)
-                let archivable = session.phase == .idle || session.phase == .waitingForInput
-                if archivable && idle > codexIdleArchiveSeconds {
-                    Self.logger.info("Archiving idle Codex desktop session \(sessionId.prefix(8))")
-                    sessions.removeValue(forKey: sessionId)
-                    cancelPendingSync(sessionId: sessionId)
-                    await CodexConversationParser.shared.resetState(for: sessionId)
-                    stateChanged = true
-                    continue
-                }
-            } else if let pid = session.pid {
+            if !isPersistentCodex, let pid = session.pid {
                 let isRunning = isProcessRunning(pid: pid)
                 if !isRunning {
                     Self.logger.info("Process \(pid) no longer running, ending session \(sessionId.prefix(8))")
