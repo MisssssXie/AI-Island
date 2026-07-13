@@ -156,10 +156,18 @@ class HookSocketServer {
     }
 
     private func startServer(onEvent: @escaping HookEventHandler, onPermissionFailure: PermissionFailureHandler?) {
-        guard serverSocket < 0 else { return }
-
+        // The notch window can be recreated after a display change. That creates
+        // a new ClaudeSessionMonitor while this process-wide socket server keeps
+        // running. Always replace the callbacks first; otherwise the server keeps
+        // yielding into the old monitor's finished AsyncStream and silently drops
+        // every subsequent hook event.
         eventHandler = onEvent
         permissionFailureHandler = onPermissionFailure
+
+        guard serverSocket < 0 else {
+            logger.debug("Socket already running; refreshed event handlers")
+            return
+        }
 
         unlink(Self.socketPath)
 

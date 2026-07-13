@@ -139,34 +139,42 @@ actor SessionStore {
 
     private func processHookEvent(_ event: HookEvent) async {
         let sessionId = event.sessionId
+        var transcriptPath = event.transcriptPath
 
         // Codex 桌面版（app-server，現內建於 ChatGPT.app）每回合會替背景 helper
         // thread（產生標題、摘要等）各發一次 hook：session_id 全新、rollout 完全
         // 不落地。若照單全收，每問一句、每次「編輯後重送」就多出數列永不回收的
         // 幽靈 session。
         //
-        // 唯一可靠的判別依據是「這個 session 是否有 rollout 檔」——真正的 user
-        // thread 一定有（sessions/… 或 archived_sessions/…，且 session_meta 在
-        // 第一則使用者訊息之前就寫入磁碟，因此 UserPromptSubmit hook 抵達時檔案
-        // 必已存在）；helper thread 永遠沒有。**不能**再用 cwd 判斷：編輯後重送
-        // 的 helper thread 會繼承專案 cwd（不是 "/"），因此舊的 cwd 閘門會漏。
+        // 判別依據仍是「這個 session 是否有 rollout 檔」，但 hook 與 rollout
+        // writer 彼此並行：第一個 UserPromptSubmit 抵達時，檔案可能正在建立，且
+        // transcript_path 也可能暫時缺席。先做短暫重試，再用 session id 從 Codex
+        // homes 尋找，不能把第一次 fileExists == false 當成永久不存在。
+        // **不能**只用 cwd 判斷：編輯後重送的 helper thread 會繼承專案 cwd
+        // （不是 "/"），因此舊的 cwd 閘門會漏。
         // 對「未知的 Codex session」設閘門：
         //  1. 純生命週期事件（SessionStart／Stop）不建列 — 真正的回合一定會再
         //     送出 UserPromptSubmit 或工具事件，屆時再建。
-        //  2. transcript_path 不存在於磁碟的事件不建列（= 沒有 rollout 的幽靈）。
+        //  2. 經短暫等待與 session-id fallback 後仍找不到 rollout 才不建列。
         //     但等待回應的 PermissionRequest 例外：使用者必須看得到才能決定。
         if sessions[sessionId] == nil, event.agentSource == .codex, !event.expectsResponse {
             let isLifecycleOnly = event.event == "SessionStart" || event.event == "Stop"
-            let hasRollout = event.transcriptPath.map {
-                !$0.isEmpty && FileManager.default.fileExists(atPath: $0)
-            } ?? false
-            if isLifecycleOnly || !hasRollout {
-                Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (cwd: \(event.cwd, privacy: .public), hasRollout: \(hasRollout, privacy: .public)) — not materializing")
+            if isLifecycleOnly {
+                Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (lifecycle only) — not materializing")
+                return
+            }
+
+            transcriptPath = await resolveCodexRolloutPath(
+                sessionId: sessionId,
+                suggestedPath: transcriptPath
+            )
+            if transcriptPath == nil {
+                Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (cwd: \(event.cwd, privacy: .public), rollout unresolved) — not materializing")
                 return
             }
         }
 
-        var session = sessions[sessionId] ?? createSession(from: event)
+        var session = sessions[sessionId] ?? createSession(from: event, transcriptPath: transcriptPath)
 
         session.pid = event.pid
         if let pid = event.pid {
@@ -177,7 +185,7 @@ actor SessionStore {
             session.tty = tty.replacingOccurrences(of: "/dev/", with: "")
         }
         // Codex: keep transcript path / host fresh (resume swaps the rollout file).
-        if let transcriptPath = event.transcriptPath {
+        if let transcriptPath {
             session.transcriptPath = transcriptPath
         }
         if let host = CodexHost.from(event.codexHost) {
@@ -261,13 +269,65 @@ actor SessionStore {
         }
     }
 
-    private func createSession(from event: HookEvent) -> SessionState {
+    /// Resolve a real Codex rollout without assuming the file already exists at
+    /// the exact instant the first hook arrives. The wait is bounded so helper
+    /// threads (which never write a rollout) cannot stall the event queue.
+    private func resolveCodexRolloutPath(sessionId: String, suggestedPath: String?) async -> String? {
+        let fileManager = FileManager.default
+
+        // In normal payloads Codex gives us the exact path. Allow the writer up
+        // to 150 ms to create it before falling back to a filesystem lookup.
+        if let suggestedPath, !suggestedPath.isEmpty {
+            for attempt in 0..<4 {
+                if fileManager.fileExists(atPath: suggestedPath) {
+                    return suggestedPath
+                }
+                if attempt < 3 {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+            }
+        } else {
+            // A missing transcript_path is also allowed by Codex. Give the
+            // rollout writer the same small window before searching by id.
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+
+        return findCodexRolloutPath(sessionId: sessionId, fileManager: fileManager)
+    }
+
+    /// Fallback for hook payloads with a missing/stale transcript_path. Rollout
+    /// filenames contain the session UUID in both active and archived stores.
+    private func findCodexRolloutPath(sessionId: String, fileManager: FileManager) -> String? {
+        for home in CodexHookInstaller.discoverCodexHomes() {
+            let roots = [
+                home.appendingPathComponent("sessions", isDirectory: true),
+                home.appendingPathComponent("archived_sessions", isDirectory: true),
+            ]
+
+            for root in roots {
+                guard let enumerator = fileManager.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                ) else { continue }
+
+                for case let url as URL in enumerator {
+                    guard url.pathExtension == "jsonl",
+                          url.lastPathComponent.contains(sessionId) else { continue }
+                    return url.path
+                }
+            }
+        }
+        return nil
+    }
+
+    private func createSession(from event: HookEvent, transcriptPath: String? = nil) -> SessionState {
         SessionState(
             sessionId: event.sessionId,
             cwd: event.cwd,
             projectName: URL(fileURLWithPath: event.cwd).lastPathComponent,
             source: event.agentSource,
-            transcriptPath: event.transcriptPath,
+            transcriptPath: transcriptPath ?? event.transcriptPath,
             codexHost: CodexHost.from(event.codexHost),
             pid: event.pid,
             tty: event.tty?.replacingOccurrences(of: "/dev/", with: ""),
