@@ -3,13 +3,22 @@
     <channel>
         <title>AI Island</title>
         <item>
+            <title>1.10.3</title>
+            <pubDate>Thu, 16 Jul 2026 14:02:36 +0800</pubDate>
+            <sparkle:version>2026071601</sparkle:version>
+            <sparkle:shortVersionString>1.10.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.10.3/AI.Island-1.10.3.dmg" length="3862177" type="application/octet-stream" sparkle:edSignature="ce3FSwHUZ9q3N6OxlHkqwtGWbSHf+2wX6WcCEKKliGw/Tnb9U3zwAJzaSt1emhUrT2kSDxiV6H/FFD1OV/5wDw=="/>
+        </item>
+        <item>
             <title>1.10.2</title>
             <pubDate>Wed, 15 Jul 2026 09:27:48 +0800</pubDate>
             <sparkle:version>2026071501</sparkle:version>
             <sparkle:shortVersionString>1.10.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/MisssssXie/AI-Island/releases/download/v1.10.2/AI.Island-1.10.2.dmg" length="3858502" type="application/octet-stream" sparkle:edSignature="bcTYjFubmb0hcpONcW5Bg2+eUaYUG0CseVJBhFWTHqEwZ/ovYkkBdqj3QWPpeOVX1pktvGl0TAWoraXr4Y4cDQ=="/>
+            <enclosure url="https://raw.githubusercontent.com/MisssssXie/AI-Island/main/AI%20Island-1.10.2.dmg" length="3858502" type="application/octet-stream" sparkle:edSignature="bcTYjFubmb0hcpONcW5Bg2+eUaYUG0CseVJBhFWTHqEwZ/ovYkkBdqj3QWPpeOVX1pktvGl0TAWoraXr4Y4cDQ=="/>
         </item>
         <item>
             <title>1.10.1</title>
@@ -19,15 +28,6 @@
             <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://raw.githubusercontent.com/MisssssXie/AI-Island/main/AI%20Island-1.10.1.dmg" length="3851584" type="application/octet-stream" sparkle:edSignature="DP3aWMPXmeGYCNIRt0akMQHm1YRM16xbBp3DRW3+y/hHCM0eASyeVqEGHgY9qzdvTtLBl7ZTwqXIdN3k1YG4CQ=="/>
-        </item>
-        <item>
-            <title>1.10.0</title>
-            <pubDate>Fri, 10 Jul 2026 14:54:27 +0800</pubDate>
-            <sparkle:version>2026071001</sparkle:version>
-            <sparkle:shortVersionString>1.10.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://raw.githubusercontent.com/MisssssXie/AI-Island/main/AI%20Island-1.10.0.dmg" length="3851398" type="application/octet-stream" sparkle:edSignature="Mk8wI3VYjOs9rAa+7TJawIrUKVRmIHHsbTvXiOttUMR5bi0hnDhER9rjd+jYckXeDiLPXg9Vb4MhJkDHR+FtDw=="/>
         </item>
     </channel>
 </rss>
