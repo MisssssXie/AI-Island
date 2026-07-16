@@ -23,6 +23,12 @@ actor SessionStore {
     /// All sessions keyed by sessionId
     private var sessions: [String: SessionState] = [:]
 
+    /// Codex 子代理（orchestrator 生成的 sub-agent thread）的 session id。
+    /// 這些 thread 現在會各自寫出真實的 rollout，因此「rollout 是否存在」的閘門
+    /// 已無法排除它們；一旦透過 session_meta 的 `thread_source == "subagent"`
+    /// 認出，便記在此處，之後同一 session 的事件可直接短路，免得每個事件都重讀檔案。
+    private var knownCodexSubagentIds: Set<String> = []
+
     /// Pending file syncs (debounced)
     private var pendingSyncs: [String: Task<Void, Never>] = [:]
 
@@ -158,6 +164,13 @@ actor SessionStore {
         //     送出 UserPromptSubmit 或工具事件，屆時再建。
         //  2. 經短暫等待與 session-id fallback 後仍找不到 rollout 才不建列。
         //     但等待回應的 PermissionRequest 例外：使用者必須看得到才能決定。
+        if knownCodexSubagentIds.contains(sessionId) {
+            // Orchestrator sub-agent thread already identified — never surfaces as
+            // its own island row (see gate below and `isCodexSubagentRollout`).
+            Self.logger.debug("Ignoring \(event.event, privacy: .public) for known Codex sub-agent thread \(sessionId.prefix(8), privacy: .public) — not materializing")
+            return
+        }
+
         if sessions[sessionId] == nil, event.agentSource == .codex, !event.expectsResponse {
             let isLifecycleOnly = event.event == "SessionStart" || event.event == "Stop"
             if isLifecycleOnly {
@@ -171,6 +184,18 @@ actor SessionStore {
             )
             if transcriptPath == nil {
                 Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (cwd: \(event.cwd, privacy: .public), rollout unresolved) — not materializing")
+                return
+            }
+
+            // Codex 的 orchestrator（如 /pr-orchestrator）會生成 sub-agent thread。
+            // 這些 thread 各自有全新 session_id、真實的 cwd 與 user 訊息，還會寫出
+            // 自己的 rollout —— 因此上面「rollout 是否存在」的閘門完全擋不住，會多出
+            // 一列空的「Idle」幽靈。唯一可靠的判別依據是 rollout 第一行 session_meta
+            // 的 `thread_source == "subagent"`（父 thread 記在 source.subagent）。
+            // 這類 thread 屬於父回合的內部運作，不應成為獨立的 island 列。
+            if let path = transcriptPath, isCodexSubagentRollout(atPath: path) {
+                knownCodexSubagentIds.insert(sessionId)
+                Self.logger.debug("Ignoring \(event.event, privacy: .public) for Codex sub-agent thread \(sessionId.prefix(8), privacy: .public) — internal to parent run, not materializing")
                 return
             }
         }
@@ -320,6 +345,55 @@ actor SessionStore {
             }
         }
         return nil
+    }
+
+    /// 判斷某個 rollout 是否屬於 Codex 子代理 thread（由 orchestrator 生成）。
+    /// 判別依據是 rollout 第一行 `session_meta` 的 `thread_source == "subagent"`
+    /// （或 `payload.source.subagent` 存在）。真正的使用者 session 為
+    /// `thread_source == "user"`。失敗時一律回傳 false（fail-open，寧可多顯示
+    /// 也不誤殺真 session）。
+    private func isCodexSubagentRollout(atPath path: String) -> Bool {
+        guard let firstLine = Self.readFirstLine(atPath: path, maxBytes: 512 * 1024) else {
+            return false
+        }
+        // Codex 寫的是壓縮 JSON（無空白）。先用最便宜、最明確的字串比對命中。
+        if firstLine.contains("\"thread_source\":\"subagent\"") {
+            return true
+        }
+        // 結構化備援：容忍空白或欄位順序不同。
+        guard let data = firstLine.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        let payload = (root["payload"] as? [String: Any]) ?? root
+        if let threadSource = payload["thread_source"] as? String, threadSource == "subagent" {
+            return true
+        }
+        if let source = payload["source"] as? [String: Any], source["subagent"] != nil {
+            return true
+        }
+        return false
+    }
+
+    /// 讀取檔案的第一行（以換行為界），最多讀 `maxBytes` 位元組。rollout 的
+    /// session_meta 第一行含完整 base_instructions，可能達數十 KB，但遠低於上限；
+    /// 分塊讀取，一遇到換行即回傳，避免把 MB 級的 rollout 整個載入。
+    private static func readFirstLine(atPath path: String, maxBytes: Int) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        var buffer = Data()
+        let chunkSize = 64 * 1024
+        while buffer.count < maxBytes {
+            guard let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty else {
+                break
+            }
+            buffer.append(chunk)
+            if let newlineIndex = buffer.firstIndex(of: 0x0A) {
+                return String(data: buffer[buffer.startIndex..<newlineIndex], encoding: .utf8)
+            }
+        }
+        if buffer.isEmpty { return nil }
+        return String(data: buffer.prefix(maxBytes), encoding: .utf8)
     }
 
     private func createSession(from event: HookEvent, transcriptPath: String? = nil) -> SessionState {
