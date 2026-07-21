@@ -267,6 +267,14 @@ def main():
             state["transcript_path"] = transcript_path
         if codex_host:
             state["codex_host"] = codex_host
+        # Codex 0.144+：thread-spawn sub-agent 的每個 turn hook（UserPromptSubmit／
+        # PreToolUse／PostToolUse／PermissionRequest）都帶 agent_id（= sub-agent 自己的
+        # thread id）。轉送給 Swift 端當作「此事件來自 sub-agent thread」的權威判別，
+        # 免得靠讀 rollout 猜。內部 thread（review／compact／memory）沒有此欄位，
+        # Swift 端另以 rollout 的 thread_source 補判。
+        agent_id = data.get("agent_id")
+        if agent_id:
+            state["agent_id"] = agent_id
     elif SOURCE == "copilot":
         state["source"] = "copilot"
 

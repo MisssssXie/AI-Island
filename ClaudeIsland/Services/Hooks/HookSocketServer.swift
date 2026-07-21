@@ -34,6 +34,9 @@ struct HookEvent: Codable, Sendable {
     let transcriptPath: String?
     /// "cli" | "desktop" | "vscode" | "exec" for Codex sessions.
     let codexHost: String?
+    /// Codex 0.144+：thread-spawn sub-agent 的 turn hook 才帶（= sub-agent 自己的
+    /// thread id）。非 nil 即代表此事件來自 sub-agent thread，不應自成一列。
+    let agentId: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -45,6 +48,7 @@ struct HookEvent: Codable, Sendable {
         case source
         case transcriptPath = "transcript_path"
         case codexHost = "codex_host"
+        case agentId = "agent_id"
     }
 
     /// Resolved agent source (defaults to claude).
@@ -54,7 +58,7 @@ struct HookEvent: Codable, Sendable {
     var isCodex: Bool { agentSource == .codex }
 
     /// Create a copy with updated toolUseId
-    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, source: String? = nil, transcriptPath: String? = nil, codexHost: String? = nil) {
+    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, source: String? = nil, transcriptPath: String? = nil, codexHost: String? = nil, agentId: String? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.event = event
@@ -69,6 +73,7 @@ struct HookEvent: Codable, Sendable {
         self.source = source
         self.transcriptPath = transcriptPath
         self.codexHost = codexHost
+        self.agentId = agentId
     }
 
     var sessionPhase: SessionPhase {
@@ -289,10 +294,19 @@ class HookSocketServer {
     /// Returns oldest-first so concurrent requests are approved in arrival order.
     func nextPendingPermission(sessionId: String, excluding toolUseId: String? = nil)
         -> (toolUseId: String, toolName: String?, toolInput: [String: AnyCodable]?, receivedAt: Date)? {
+        nextPendingPermission(sessionIds: [sessionId], excluding: toolUseId)
+    }
+
+    /// Set-based variant: Codex sub-agent threads register their pendings under
+    /// their own session id, but their permissions surface on the PARENT row —
+    /// so "the next pending for this row" must scan the parent id plus all of
+    /// its known sub-agent thread ids.
+    func nextPendingPermission(sessionIds: Set<String>, excluding toolUseId: String? = nil)
+        -> (toolUseId: String, toolName: String?, toolInput: [String: AnyCodable]?, receivedAt: Date)? {
         permissionsLock.lock()
         defer { permissionsLock.unlock() }
         let next = pendingPermissions.values
-            .filter { $0.sessionId == sessionId && $0.toolUseId != toolUseId }
+            .filter { sessionIds.contains($0.sessionId) && $0.toolUseId != toolUseId }
             .min { $0.receivedAt < $1.receivedAt }
         guard let pending = next else { return nil }
         return (pending.toolUseId, pending.event.tool, pending.event.toolInput, pending.receivedAt)
@@ -506,7 +520,8 @@ class HookSocketServer {
                 message: event.message,
                 source: event.source,
                 transcriptPath: event.transcriptPath,
-                codexHost: event.codexHost
+                codexHost: event.codexHost,
+                agentId: event.agentId
             )
 
             let pending = PendingPermission(

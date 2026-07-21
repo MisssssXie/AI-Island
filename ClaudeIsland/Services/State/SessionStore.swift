@@ -23,11 +23,18 @@ actor SessionStore {
     /// All sessions keyed by sessionId
     private var sessions: [String: SessionState] = [:]
 
-    /// Codex 子代理（orchestrator 生成的 sub-agent thread）的 session id。
-    /// 這些 thread 現在會各自寫出真實的 rollout，因此「rollout 是否存在」的閘門
-    /// 已無法排除它們；一旦透過 session_meta 的 `thread_source == "subagent"`
-    /// 認出，便記在此處，之後同一 session 的事件可直接短路，免得每個事件都重讀檔案。
+    /// Codex「非使用者 thread」的 session id（thread-spawn sub-agent、review／
+    /// compact／memory_consolidation 等內部 thread）。一個 Codex 使用者 session 會
+    /// 產生多個 thread、每個有自己的 session_id —— 這些 thread 的事件一律不得自成
+    /// 一列。一旦透過 hook payload 的 agent_id 或 rollout session_meta 的
+    /// `thread_source != "user"` 認出，便記在此處，之後同一 thread 的事件直接短路，
+    /// 免得每個事件都重讀檔案。
     private var knownCodexSubagentIds: Set<String> = []
+
+    /// Codex 非使用者 thread → 父 thread id（rollout session_meta 的
+    /// `parent_thread_id`）。sub-agent 的授權請求靠這個歸併到父列顯示；
+    /// `nextPermissionContext` 也靠它把父列與所有子 thread 的待決授權串成一串。
+    private var codexSubagentParents: [String: String] = [:]
 
     /// Pending file syncs (debounced)
     private var pendingSyncs: [String: Task<Void, Never>] = [:]
@@ -145,58 +152,121 @@ actor SessionStore {
     // MARK: - Hook Event Processing
 
     private func processHookEvent(_ event: HookEvent) async {
-        let sessionId = event.sessionId
+        var event = event
+        var sessionId = event.sessionId
         var transcriptPath = event.transcriptPath
 
-        // Codex 桌面版（app-server，現內建於 ChatGPT.app）每回合會替背景 helper
-        // thread（產生標題、摘要等）各發一次 hook：session_id 全新、rollout 完全
-        // 不落地。若照單全收，每問一句、每次「編輯後重送」就多出數列永不回收的
-        // 幽靈 session。
+        // ── Codex 多 thread 歸併閘門 ────────────────────────────────────────
+        // Codex 一個「使用者 session」會產生多個 thread、每個有自己的 session_id：
+        //  - 背景 helper thread（標題／摘要）：無 rollout，一閃即逝
+        //  - thread-spawn sub-agent（orchestrator 生成）：有 rollout、
+        //    thread_source="subagent"、payload 帶 agent_id、頂層 parent_thread_id
+        //  - review／compact／memory_consolidation 等內部 thread：有 rollout、
+        //    thread_source != "user"、無 agent_id
+        // 原則：**只有 thread_source == "user" 的 thread 才能自成一列**；其餘 thread
+        // 的事件一律歸併到父列（授權請求）或忽略（其他事件），才不會每跑一次
+        // orchestrator 就散出好幾列空的「Ready／Idle」幽靈。
         //
-        // 判別依據仍是「這個 session 是否有 rollout 檔」，但 hook 與 rollout
-        // writer 彼此並行：第一個 UserPromptSubmit 抵達時，檔案可能正在建立，且
-        // transcript_path 也可能暫時缺席。先做短暫重試，再用 session id 從 Codex
-        // homes 尋找，不能把第一次 fileExists == false 當成永久不存在。
-        // **不能**只用 cwd 判斷：編輯後重送的 helper thread 會繼承專案 cwd
-        // （不是 "/"），因此舊的 cwd 閘門會漏。
-        // 對「未知的 Codex session」設閘門：
-        //  1. 純生命週期事件（SessionStart／Stop）不建列 — 真正的回合一定會再
-        //     送出 UserPromptSubmit 或工具事件，屆時再建。
-        //  2. 經短暫等待與 session-id fallback 後仍找不到 rollout 才不建列。
-        //     但等待回應的 PermissionRequest 例外：使用者必須看得到才能決定。
-        if knownCodexSubagentIds.contains(sessionId) {
-            // Orchestrator sub-agent thread already identified — never surfaces as
-            // its own island row (see gate below and `isCodexSubagentRollout`).
-            Self.logger.debug("Ignoring \(event.event, privacy: .public) for known Codex sub-agent thread \(sessionId.prefix(8), privacy: .public) — not materializing")
-            return
-        }
+        // 判別分三層（由便宜到貴、由新到舊的 Codex 版本）：
+        //  A. hook payload 的 agent_id（0.144+ 的 thread-spawn sub-agent 必帶）
+        //  B. 快取（knownCodexSubagentIds）
+        //  C. rollout 第一行 session_meta 的 thread_source（涵蓋無 agent_id 的
+        //     內部 thread 與較舊版本）；無 rollout 即是 helper thread
+        // hook 與 rollout writer 彼此並行：第一個事件抵達時檔案可能正在建立，
+        // resolveCodexRolloutPath 已含短暫重試與 session-id fallback。
+        // 讀不到／parse 失敗一律 fail-open 當 user thread，寧可多顯示也不誤殺。
+        if event.agentSource == .codex {
+            var isNonUserThread = knownCodexSubagentIds.contains(sessionId) || event.agentId != nil
+            var parentId = codexSubagentParents[sessionId]
 
-        if sessions[sessionId] == nil, event.agentSource == .codex, !event.expectsResponse {
-            let isLifecycleOnly = event.event == "SessionStart" || event.event == "Stop"
-            if isLifecycleOnly {
-                Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (lifecycle only) — not materializing")
-                return
-            }
-
-            transcriptPath = await resolveCodexRolloutPath(
-                sessionId: sessionId,
-                suggestedPath: transcriptPath
-            )
-            if transcriptPath == nil {
-                Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (cwd: \(event.cwd, privacy: .public), rollout unresolved) — not materializing")
-                return
-            }
-
-            // Codex 的 orchestrator（如 /pr-orchestrator）會生成 sub-agent thread。
-            // 這些 thread 各自有全新 session_id、真實的 cwd 與 user 訊息，還會寫出
-            // 自己的 rollout —— 因此上面「rollout 是否存在」的閘門完全擋不住，會多出
-            // 一列空的「Idle」幽靈。唯一可靠的判別依據是 rollout 第一行 session_meta
-            // 的 `thread_source == "subagent"`（父 thread 記在 source.subagent）。
-            // 這類 thread 屬於父回合的內部運作，不應成為獨立的 island 列。
-            if let path = transcriptPath, isCodexSubagentRollout(atPath: path) {
+            // 已判別的非 user thread、且不是授權請求：不建列、不更新，只把活動
+            // 時間歸併給父列（sub-agent 工作中＝父回合工作中，避免父列因長時間
+            // 無自身事件而被 staleness 降級）。
+            if isNonUserThread, !event.expectsResponse {
                 knownCodexSubagentIds.insert(sessionId)
-                Self.logger.debug("Ignoring \(event.event, privacy: .public) for Codex sub-agent thread \(sessionId.prefix(8), privacy: .public) — internal to parent run, not materializing")
+                if let parentId, var parent = sessions[parentId] {
+                    parent.lastActivity = Date()
+                    sessions[parentId] = parent
+                }
+                Self.logger.debug("Ignoring \(event.event, privacy: .public) for Codex non-user thread \(sessionId.prefix(8), privacy: .public) — folded into parent \(parentId?.prefix(8) ?? "?", privacy: .public)")
                 return
+            }
+
+            if sessions[sessionId] == nil || isNonUserThread {
+                // 純生命週期事件（SessionStart／Stop）不建列 — 真正的回合一定會
+                // 再送 UserPromptSubmit 或工具事件，屆時再建。
+                let isLifecycleOnly = event.event == "SessionStart" || event.event == "Stop"
+                if sessions[sessionId] == nil, !isNonUserThread, isLifecycleOnly {
+                    Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (lifecycle only) — not materializing")
+                    return
+                }
+
+                // 已認出且已知父 id 的 thread 免重讀 rollout（後續授權直接歸併）。
+                if !(isNonUserThread && parentId != nil) {
+                    if let resolved = await resolveCodexRolloutPath(
+                        sessionId: sessionId,
+                        suggestedPath: transcriptPath
+                    ) {
+                        transcriptPath = resolved
+                        let info = codexThreadInfo(atPath: resolved)
+                        if !info.isUserThread { isNonUserThread = true }
+                        if parentId == nil { parentId = info.parentThreadId }
+                    } else if sessions[sessionId] == nil, !isNonUserThread, !event.expectsResponse {
+                        // 無 rollout 的 helper thread：不建列。授權請求例外——Codex 卡在
+                        // socket 上等回應，使用者必須看得到才能決定（fail-open 建列）。
+                        Self.logger.debug("Ignoring \(event.event, privacy: .public) for unknown Codex session \(sessionId.prefix(8), privacy: .public) (cwd: \(event.cwd, privacy: .public), rollout unresolved) — not materializing")
+                        return
+                    }
+                }
+
+                if isNonUserThread {
+                    knownCodexSubagentIds.insert(sessionId)
+                    if let parentId { codexSubagentParents[sessionId] = parentId }
+
+                    if event.expectsResponse, let parentId {
+                        // 歸併：sub-agent 的授權請求掛到父列顯示。socket 端的 pending
+                        // 以 toolUseId 為 key，與列無關；Allow／Deny 照常回覆到
+                        // sub-agent 的 socket。父列不在（island 中途啟動）就從父
+                        // rollout 建；父列已在則不得覆寫其 transcriptPath。
+                        var parentTranscript: String?
+                        if sessions[parentId] == nil {
+                            parentTranscript = findCodexRolloutPath(sessionId: parentId, fileManager: .default)
+                        }
+                        Self.logger.info("Routing Codex sub-agent permission \(sessionId.prefix(8), privacy: .public) → parent \(parentId.prefix(8), privacy: .public)")
+                        event = HookEvent(
+                            sessionId: parentId,
+                            cwd: event.cwd,
+                            event: event.event,
+                            status: event.status,
+                            pid: event.pid,
+                            tty: event.tty,
+                            tool: event.tool,
+                            toolInput: event.toolInput,
+                            toolUseId: event.toolUseId,
+                            notificationType: event.notificationType,
+                            message: event.message,
+                            source: event.source,
+                            transcriptPath: parentTranscript,
+                            codexHost: event.codexHost,
+                            agentId: event.agentId
+                        )
+                        sessionId = parentId
+                        transcriptPath = parentTranscript
+                    } else if event.expectsResponse {
+                        // 找不到父 thread id（rollout 缺席或舊格式）：fail-open 以
+                        // sub-agent 自己的 id 暫時建列，讓使用者能決定；授權一解決
+                        // 就由 advancePastPermission／自動核准分支移除，不留幽靈。
+                        Self.logger.debug("Codex non-user thread \(sessionId.prefix(8), privacy: .public) requested approval, parent unknown — surfacing a transient row until resolved")
+                    } else {
+                        // 剛判別出的非 user thread 的一般事件：同上，歸併後忽略。
+                        if let parentId, var parent = sessions[parentId] {
+                            parent.lastActivity = Date()
+                            sessions[parentId] = parent
+                        }
+                        Self.logger.debug("Ignoring \(event.event, privacy: .public) for Codex non-user thread \(sessionId.prefix(8), privacy: .public) — internal to parent run, not materializing")
+                        return
+                    }
+                }
             }
         }
 
@@ -244,6 +314,17 @@ actor SessionStore {
             Self.logger.info("auto-approved \(event.tool ?? "?", privacy: .public) for \(sessionId.prefix(8), privacy: .public)")
         }
 
+        // 自動核准的 Codex sub-agent 授權，沒有後續的 permissionApproved 事件可觸發
+        // 清理，因此在這裡直接不建列，否則會留下一列空的暫時列（幽靈）。socket 已回應
+        // allow，Codex 會照常繼續。
+        if autoApprove, knownCodexSubagentIds.contains(sessionId) {
+            sessions.removeValue(forKey: sessionId)
+            cancelPendingSync(sessionId: sessionId)
+            await CodexConversationParser.shared.resetState(for: sessionId)
+            Self.logger.debug("Auto-approved Codex sub-agent permission for \(sessionId.prefix(8), privacy: .public) — not materializing transient row")
+            return
+        }
+
         let newPhase: SessionPhase? = autoApprove ? .processing : event.determinePhase()
 
         // 處於休息狀態的工作階段（Stop 後的 waitingForInput，或中斷／idle_prompt 後的 idle）
@@ -260,6 +341,15 @@ actor SessionStore {
         if let newPhase {
             if isResting, newPhase == .processing, cannotStartTurn {
                 Self.logger.debug("Ignoring trailing \(event.event, privacy: .public) that would revive resting session \(sessionId.prefix(8), privacy: .public)")
+            } else if session.source == .codex,
+                      session.phase.isWaitingForApproval,
+                      newPhase == .waitingForInput || newPhase == .idle,
+                      nextPermissionContext(for: session, excluding: "") != nil {
+                // Codex orchestrator 可以在 sub-agent 還掛著授權時就結束自己的回合
+                // （「我先不空等」）——父 thread 的 Stop 會把父列拉去 waitingForInput，
+                // Allow／Deny 就消失了。只要這列（含子 thread）還有未解決的授權，
+                // 就守住 waitingForApproval。
+                Self.logger.debug("Holding waitingForApproval on \(sessionId.prefix(8), privacy: .public) — pending permission(s) unresolved (\(event.event, privacy: .public) arrived)")
             } else if session.phase.canTransition(to: newPhase) {
                 session.phase = newPhase
             } else {
@@ -347,32 +437,55 @@ actor SessionStore {
         return nil
     }
 
-    /// 判斷某個 rollout 是否屬於 Codex 子代理 thread（由 orchestrator 生成）。
-    /// 判別依據是 rollout 第一行 `session_meta` 的 `thread_source == "subagent"`
-    /// （或 `payload.source.subagent` 存在）。真正的使用者 session 為
-    /// `thread_source == "user"`。失敗時一律回傳 false（fail-open，寧可多顯示
-    /// 也不誤殺真 session）。
-    private func isCodexSubagentRollout(atPath path: String) -> Bool {
+    /// Codex rollout 第一行 session_meta 解出的 thread 屬性。
+    private struct CodexThreadInfo {
+        /// 是否為真正的使用者 thread（唯一可自成 island 列的種類）。
+        let isUserThread: Bool
+        /// 父 thread id（僅 sub-agent 類 thread 有；session_meta 頂層
+        /// `parent_thread_id`，或 `source.subagent.thread_spawn.parent_thread_id`）。
+        let parentThreadId: String?
+    }
+
+    /// 判別某個 rollout 屬於哪一類 Codex thread。最新的 ThreadSource enum 為
+    /// user／subagent／memory_consolidation／Feature(任意字串)，而 SubAgentSource
+    /// 還有 review、compact 等 —— 因此規則是「**只有 `thread_source == "user"`
+    /// 才算使用者 thread**」，而不是列舉所有非 user 值。欄位缺席（舊版 rollout）
+    /// 時退回檢查 `source.subagent`；讀不到／parse 失敗一律 fail-open 視為
+    /// user thread，寧可多顯示也不誤殺真 session。
+    private func codexThreadInfo(atPath path: String) -> CodexThreadInfo {
         guard let firstLine = Self.readFirstLine(atPath: path, maxBytes: 512 * 1024) else {
-            return false
+            return CodexThreadInfo(isUserThread: true, parentThreadId: nil)
         }
-        // Codex 寫的是壓縮 JSON（無空白）。先用最便宜、最明確的字串比對命中。
-        if firstLine.contains("\"thread_source\":\"subagent\"") {
-            return true
+        // Codex 寫的是壓縮 JSON（無空白）。最常見的 user thread 先用最便宜的
+        // 字串比對放行，免整行 parse（session_meta 帶完整 base_instructions，
+        // 可達數十 KB）。
+        if firstLine.contains("\"thread_source\":\"user\"") {
+            return CodexThreadInfo(isUserThread: true, parentThreadId: nil)
         }
-        // 結構化備援：容忍空白或欄位順序不同。
+        // 結構化解析：容忍空白、欄位順序不同，並順手取出父 thread id。
         guard let data = firstLine.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return false
+            return CodexThreadInfo(isUserThread: true, parentThreadId: nil)
         }
         let payload = (root["payload"] as? [String: Any]) ?? root
-        if let threadSource = payload["thread_source"] as? String, threadSource == "subagent" {
-            return true
+
+        var isUser = true
+        if let threadSource = payload["thread_source"] as? String {
+            isUser = threadSource == "user"
+        } else if let source = payload["source"] as? [String: Any], source["subagent"] != nil {
+            // 舊版無 thread_source：以 source.subagent 判別。
+            isUser = false
         }
-        if let source = payload["source"] as? [String: Any], source["subagent"] != nil {
-            return true
+
+        var parentThreadId = payload["parent_thread_id"] as? String
+        if parentThreadId == nil,
+           let source = payload["source"] as? [String: Any],
+           let subagent = source["subagent"] as? [String: Any],
+           let spawn = subagent["thread_spawn"] as? [String: Any] {
+            parentThreadId = spawn["parent_thread_id"] as? String
         }
-        return false
+
+        return CodexThreadInfo(isUserThread: isUser, parentThreadId: parentThreadId)
     }
 
     /// 讀取檔案的第一行（以換行為界），最多讀 `maxBytes` 位元組。rollout 的
@@ -619,7 +732,8 @@ actor SessionStore {
         updateToolStatus(in: &session, toolId: toolUseId, status: resolvedStatus)
 
         // Check if there are other tools still waiting for approval
-        if let nextContext = nextPermissionContext(for: session, excluding: toolUseId) {
+        let nextContext = nextPermissionContext(for: session, excluding: toolUseId)
+        if let nextContext {
             // Another tool is waiting - stay in waitingForApproval with that tool's context
             let newPhase = SessionPhase.waitingForApproval(nextContext)
             if session.phase.canTransition(to: newPhase) {
@@ -631,6 +745,18 @@ actor SessionStore {
             if session.phase.canTransition(to: .processing) {
                 session.phase = .processing
             }
+        }
+
+        // Codex sub-agent 的授權列只是暫時借用；所有待決授權都解決後就移除，不讓它以
+        // 空的「Ready／Processing」殘留在島上（sub-agent 是父回合的內部運作，本就不該
+        // 有自己的列）。移除後，該 thread 之後的 Stop／工具事件會被 knownCodexSubagentIds
+        // 閘門擋掉，不會再冒出來。
+        if nextContext == nil, knownCodexSubagentIds.contains(sessionId) {
+            sessions.removeValue(forKey: sessionId)
+            cancelPendingSync(sessionId: sessionId)
+            await CodexConversationParser.shared.resetState(for: sessionId)
+            Self.logger.debug("Removed transient Codex sub-agent permission row\(logSuffix) for \(sessionId.prefix(8), privacy: .public)")
+            return
         }
 
         sessions[sessionId] = session
@@ -710,8 +836,14 @@ actor SessionStore {
     /// would be stranded (button vanishes, hook blocks until timeout).
     private func nextPermissionContext(for session: SessionState, excluding toolUseId: String) -> PermissionContext? {
         if session.source == .codex {
+            // Sub-agent thread 的 pending 在 socket 端登記於它自己的 session id，
+            // 但顯示在父列上 —— 掃描父 id＋所有已知子 thread id。
+            var ids: Set<String> = [session.sessionId]
+            for (child, parent) in codexSubagentParents where parent == session.sessionId {
+                ids.insert(child)
+            }
             guard let next = HookSocketServer.shared.nextPendingPermission(
-                sessionId: session.sessionId, excluding: toolUseId
+                sessionIds: ids, excluding: toolUseId
             ) else { return nil }
             return PermissionContext(
                 toolUseId: next.toolUseId,
@@ -741,7 +873,8 @@ actor SessionStore {
         updateToolStatus(in: &session, toolId: toolUseId, status: .error)
 
         // Check if there are other tools still waiting for approval
-        if let nextContext = nextPermissionContext(for: session, excluding: toolUseId) {
+        let nextContext = nextPermissionContext(for: session, excluding: toolUseId)
+        if let nextContext {
             // Another tool is waiting - switch to that tool's context
             let newPhase = SessionPhase.waitingForApproval(nextContext)
             if session.phase.canTransition(to: newPhase) {
@@ -751,6 +884,15 @@ actor SessionStore {
         } else if case .waitingForApproval = session.phase {
             // No more pending permissions - clear permission state
             session.phase = .idle
+        }
+
+        // 同 advancePastPermission：Codex sub-agent 的暫時授權列在無待決授權後移除。
+        if nextContext == nil, knownCodexSubagentIds.contains(sessionId) {
+            sessions.removeValue(forKey: sessionId)
+            cancelPendingSync(sessionId: sessionId)
+            await CodexConversationParser.shared.resetState(for: sessionId)
+            Self.logger.debug("Removed transient Codex sub-agent permission row after socket failure for \(sessionId.prefix(8), privacy: .public)")
+            return
         }
 
         sessions[sessionId] = session
