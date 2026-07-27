@@ -155,6 +155,7 @@ actor SessionStore {
 
         var session = sessions[sessionId] ?? createSession(from: event, transcriptPath: transcriptPath)
 
+        session.approvalTimeoutMessage = nil
         session.pid = event.pid
         if let pid = event.pid {
             let tree = ProcessTreeBuilder.shared.buildTree()
@@ -881,6 +882,9 @@ actor SessionStore {
         } else if case .waitingForApproval = session.phase {
             // No more pending permissions - clear permission state
             session.phase = .idle
+            if session.source == .codex {
+                session.approvalTimeoutMessage = "核准要求已逾時，請回 Codex 操作"
+            }
         }
 
         sessions[sessionId] = session

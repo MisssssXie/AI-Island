@@ -44,7 +44,9 @@ struct HookInstaller {
         let python = detectPython()
         let command = "\(python) \(ClaudePaths.hookScriptShellPath)"
         let hookEntry: [[String: Any]] = [["type": "command", "command": command]]
-        let hookEntryWithTimeout: [[String: Any]] = [["type": "command", "command": command, "timeout": 86400]]
+        // Keep the outer hook alive slightly longer than the app/socket's
+        // two-hour approval window so the timeout message can be delivered.
+        let hookEntryWithTimeout: [[String: Any]] = [["type": "command", "command": command, "timeout": 7260]]
         let withMatcher: [[String: Any]] = [["matcher": "*", "hooks": hookEntry]]
         let withMatcherAndTimeout: [[String: Any]] = [["matcher": "*", "hooks": hookEntryWithTimeout]]
         let withoutMatcher: [[String: Any]] = [["hooks": hookEntry]]

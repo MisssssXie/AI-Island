@@ -20,7 +20,7 @@ import socket
 import sys
 
 SOCKET_PATH = "/tmp/claude-island.sock"
-TIMEOUT_SECONDS = 300  # 5 minutes for permission decisions
+TIMEOUT_SECONDS = 7200  # 2 hours for permission decisions
 
 
 def _parse_source():

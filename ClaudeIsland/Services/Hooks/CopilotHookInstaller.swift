@@ -79,7 +79,7 @@ enum CopilotHookInstaller {
             ("sessionStart",        hookEntry(event: "sessionStart", timeout: 5)),
             ("userPromptSubmitted", hookEntry(event: "userPromptSubmitted", timeout: 5)),
             ("preToolUse",          hookEntry(event: "preToolUse", timeout: 5)),
-            ("permissionRequest",   hookEntry(event: "permissionRequest", timeout: 7200)),
+            ("permissionRequest",   hookEntry(event: "permissionRequest", timeout: 7260)),
             ("postToolUse",         hookEntry(event: "postToolUse", timeout: 5)),
             ("agentStop",           hookEntry(event: "agentStop", timeout: 5)),
             ("sessionEnd",          hookEntry(event: "sessionEnd", timeout: 5)),

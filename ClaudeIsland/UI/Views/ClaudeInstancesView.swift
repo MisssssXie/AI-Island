@@ -286,7 +286,12 @@ struct InstanceRow: View {
                 }
 
                 // Line 3: Current status / tool
-                if isWaitingForApproval, let toolName = session.pendingToolName {
+                if let timeoutMessage = session.approvalTimeoutMessage {
+                    Text(timeoutMessage)
+                        .font(.system(size: 11))
+                        .foregroundColor(TerminalColors.amber.opacity(0.9))
+                        .lineLimit(1)
+                } else if isWaitingForApproval, let toolName = session.pendingToolName {
                     HStack(spacing: 4) {
                         Text(MCPToolFormatter.formatToolName(toolName))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))

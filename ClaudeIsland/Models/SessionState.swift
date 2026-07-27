@@ -40,6 +40,9 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Current phase in the session lifecycle
     var phase: SessionPhase
 
+    /// One-off status shown after a permission request times out.
+    var approvalTimeoutMessage: String?
+
     // MARK: - Chat History
 
     /// All chat items for this session (replaces ChatHistoryManager.histories)
@@ -94,6 +97,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         tty: String? = nil,
         isInTmux: Bool = false,
         phase: SessionPhase = .idle,
+        approvalTimeoutMessage: String? = nil,
         chatItems: [ChatHistoryItem] = [],
         toolTracker: ToolTracker = ToolTracker(),
         subagentState: SubagentState = SubagentState(),
@@ -116,6 +120,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.tty = tty
         self.isInTmux = isInTmux
         self.phase = phase
+        self.approvalTimeoutMessage = approvalTimeoutMessage
         self.chatItems = chatItems
         self.toolTracker = toolTracker
         self.subagentState = subagentState

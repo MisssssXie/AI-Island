@@ -134,6 +134,7 @@ typealias PermissionFailureHandler = @Sendable (_ sessionId: String, _ toolUseId
 class HookSocketServer {
     static let shared = HookSocketServer()
     static let socketPath = "/tmp/claude-island.sock"
+    private static let permissionTimeout: TimeInterval = 2 * 60 * 60
 
     private var serverSocket: Int32 = -1
     private var acceptSource: DispatchSourceRead?
@@ -542,6 +543,10 @@ class HookSocketServer {
             pendingPermissions[toolUseId] = pending
             permissionsLock.unlock()
 
+            queue.asyncAfter(deadline: .now() + Self.permissionTimeout) { [weak self] in
+                self?.expirePendingPermission(toolUseId: toolUseId)
+            }
+
             eventHandler?(updatedEvent)
             return
         } else {
@@ -549,6 +554,19 @@ class HookSocketServer {
         }
 
         eventHandler?(event)
+    }
+
+    private func expirePendingPermission(toolUseId: String) {
+        permissionsLock.lock()
+        guard let pending = pendingPermissions.removeValue(forKey: toolUseId) else {
+            permissionsLock.unlock()
+            return
+        }
+        permissionsLock.unlock()
+
+        logger.info("Permission request timed out for \(pending.sessionId.prefix(8), privacy: .public) tool:\(toolUseId.prefix(12), privacy: .public)")
+        close(pending.clientSocket)
+        permissionFailureHandler?(pending.sessionId, toolUseId)
     }
 
     private func sendPermissionResponse(toolUseId: String, decision: String, reason: String?) {

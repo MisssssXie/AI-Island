@@ -103,7 +103,7 @@ enum CodexHookInstaller {
             ("SessionStart",     hookEntry(command: command, timeout: 5,    matcher: nil)),
             ("UserPromptSubmit", hookEntry(command: command, timeout: 5,    matcher: nil)),
             ("PreToolUse",       hookEntry(command: command, timeout: 5,    matcher: "")),
-            ("PermissionRequest", hookEntry(command: command, timeout: 7200, matcher: nil)),
+            ("PermissionRequest", hookEntry(command: command, timeout: 7260, matcher: nil)),
             ("PostToolUse",      hookEntry(command: command, timeout: 5,    matcher: "")),
             ("Stop",             hookEntry(command: command, timeout: 5,    matcher: nil)),
         ]
