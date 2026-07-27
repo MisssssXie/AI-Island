@@ -165,6 +165,15 @@ struct SessionState: Equatable, Identifiable, Sendable {
         return nil
     }
 
+    /// Apply the UI state produced when the last pending permission expires.
+    /// Keeping this transition on the model makes the timeout behavior easy to
+    /// regression-test without waiting for the real two-hour timer.
+    nonisolated mutating func applyApprovalTimeout() {
+        guard case .waitingForApproval = phase else { return }
+        phase = .idle
+        approvalTimeoutMessage = "核准要求已逾時，請回 \(source.displayName) 操作"
+    }
+
     // MARK: - UI Convenience Properties
 
     /// Stable identity for SwiftUI (combines PID and sessionId for animation stability)

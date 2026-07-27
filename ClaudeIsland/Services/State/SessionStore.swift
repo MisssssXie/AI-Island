@@ -881,10 +881,7 @@ actor SessionStore {
             }
         } else if case .waitingForApproval = session.phase {
             // No more pending permissions - clear permission state
-            session.phase = .idle
-            if session.source == .codex {
-                session.approvalTimeoutMessage = "核准要求已逾時，請回 Codex 操作"
-            }
+            session.applyApprovalTimeout()
         }
 
         sessions[sessionId] = session

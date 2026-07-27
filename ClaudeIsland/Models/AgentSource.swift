@@ -22,6 +22,15 @@ enum AgentSource: String, Codable, Sendable, Equatable, CaseIterable {
         guard let raw else { return .claude }
         return AgentSource(rawValue: raw) ?? .claude
     }
+
+    /// Product name used in user-facing recovery instructions.
+    nonisolated var displayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .copilot: return "Copilot"
+        }
+    }
 }
 
 /// Which Codex entry point hosts a session. Only meaningful when
