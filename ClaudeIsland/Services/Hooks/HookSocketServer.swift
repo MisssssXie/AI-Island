@@ -284,6 +284,22 @@ class HookSocketServer {
         return (pending.event.tool, pending.toolUseId, pending.event.toolInput)
     }
 
+    /// A Codex sub-agent permission is displayed on its existing parent row.
+    /// Re-key its ownership once so SessionStore does not need a parallel
+    /// child-to-parent cache.
+    func movePendingPermission(toolUseId: String, toSessionId sessionId: String) {
+        permissionsLock.lock()
+        defer { permissionsLock.unlock() }
+        guard let pending = pendingPermissions[toolUseId] else { return }
+        pendingPermissions[toolUseId] = PendingPermission(
+            sessionId: sessionId,
+            toolUseId: pending.toolUseId,
+            clientSocket: pending.clientSocket,
+            event: pending.event,
+            receivedAt: pending.receivedAt
+        )
+    }
+
     /// Oldest still-pending permission for a session, excluding one toolUseId.
     ///
     /// Codex fires one PermissionRequest per exec_command, so several can be
@@ -294,19 +310,10 @@ class HookSocketServer {
     /// Returns oldest-first so concurrent requests are approved in arrival order.
     func nextPendingPermission(sessionId: String, excluding toolUseId: String? = nil)
         -> (toolUseId: String, toolName: String?, toolInput: [String: AnyCodable]?, receivedAt: Date)? {
-        nextPendingPermission(sessionIds: [sessionId], excluding: toolUseId)
-    }
-
-    /// Set-based variant: Codex sub-agent threads register their pendings under
-    /// their own session id, but their permissions surface on the PARENT row —
-    /// so "the next pending for this row" must scan the parent id plus all of
-    /// its known sub-agent thread ids.
-    func nextPendingPermission(sessionIds: Set<String>, excluding toolUseId: String? = nil)
-        -> (toolUseId: String, toolName: String?, toolInput: [String: AnyCodable]?, receivedAt: Date)? {
         permissionsLock.lock()
         defer { permissionsLock.unlock() }
         let next = pendingPermissions.values
-            .filter { sessionIds.contains($0.sessionId) && $0.toolUseId != toolUseId }
+            .filter { $0.sessionId == sessionId && $0.toolUseId != toolUseId }
             .min { $0.receivedAt < $1.receivedAt }
         guard let pending = next else { return nil }
         return (pending.toolUseId, pending.event.tool, pending.event.toolInput, pending.receivedAt)

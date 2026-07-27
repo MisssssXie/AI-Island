@@ -58,8 +58,10 @@ class ClaudeSessionMonitor: ObservableObject {
     // MARK: - Monitoring Lifecycle
 
     func startMonitoring() {
-        // Start periodic status rechecking
+        // SessionStore 是記憶體狀態；app 重啟後先從最近的 Codex user
+        // rollouts 恢復聊天列，不能要求使用者再問一次才重新出現。
         Task {
+            await SessionStore.shared.restoreRecentCodexUserSessions()
             await SessionStore.shared.startPeriodicStatusCheck()
         }
 
